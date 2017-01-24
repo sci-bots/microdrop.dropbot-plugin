@@ -4,7 +4,7 @@ source:
   git_url: ../
 
 package:
-  name: dropbot-plugin
+  name: dropbot_plugin
 {% if GIT_DESCRIBE_NUMBER > '0' %}
   version: {{ GIT_DESCRIBE_TAG[1:] }}.post{{ GIT_DESCRIBE_NUMBER }}
 {% else %}
