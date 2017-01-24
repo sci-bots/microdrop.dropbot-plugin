@@ -1,0 +1,45 @@
+# source will be downloaded prior to filling in jinja templates
+# Example assumes that this folder has setup.py in it
+source:
+  git_url: ../
+
+package:
+  name: dropbot-plugin
+{% if GIT_DESCRIBE_NUMBER > '0' %}
+  version: {{ GIT_DESCRIBE_TAG[1:] }}.post{{ GIT_DESCRIBE_NUMBER }}
+{% else %}
+  version: {{ GIT_DESCRIBE_TAG[1:] }}
+{% endif %}
+
+requirements:
+  build:
+    - dropbot
+    - flatland-fork
+    - microdrop >=2.0
+    - microdrop-plugin-template
+    - microdrop-utility
+    - pandas
+    - path_helpers >=0.2.post4
+    - pip-helpers
+    - pytables
+    - pyyaml
+    - wheeler.pygtkhelpers
+    - zmq-plugin
+
+  run:
+    - dropbot
+    - flatland-fork
+    - microdrop >=2.0
+    - microdrop-plugin-template
+    - microdrop-utility
+    - pandas
+    - path_helpers >=0.2.post4
+    - pip-helpers
+    - pytables
+    - pyyaml
+    - wheeler.pygtkhelpers
+    - zmq-plugin
+
+about:
+  home: http://github.com/wheeler-microfluidics/dropbot-plugin
+  license: BSD
