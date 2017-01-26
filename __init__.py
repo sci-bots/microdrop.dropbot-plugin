@@ -32,6 +32,7 @@ from path_helpers import path
 from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
+import conda_helpers as ch
 import gobject
 import gtk
 import microdrop_utility as utility
@@ -154,7 +155,10 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
     )
 
-    version = get_plugin_info(path(__file__).parent).version
+    try:
+        version = ch.package_version('dropbot_plugin')
+    except NameError:
+        version = None
 
     @property
     def StepFields(self):

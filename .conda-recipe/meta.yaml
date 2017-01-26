@@ -11,15 +11,21 @@ package:
   version: {{ GIT_DESCRIBE_TAG[1:] }}
 {% endif %}
 
+build:
+  number: 0
+  script: python -m mpm.bin.build
+
 requirements:
   build:
+    - conda-helpers >=0.3.post2
     - dropbot
     - flatland-fork
     - microdrop >=2.0
     - microdrop-plugin-template
+    - microdrop-plugin-manager >=0.7.post2
     - microdrop-utility
     - pandas
-    - path_helpers >=0.2.post4
+    - path_helpers >=0.5
     - pip-helpers
     - pytables
     - pyyaml
@@ -27,13 +33,14 @@ requirements:
     - zmq-plugin
 
   run:
+    - conda-helpers >=0.3.post2
     - dropbot
     - flatland-fork
     - microdrop >=2.0
     - microdrop-plugin-template
     - microdrop-utility
     - pandas
-    - path_helpers >=0.2.post4
+    - path_helpers >=0.5
     - pip-helpers
     - pytables
     - pyyaml
