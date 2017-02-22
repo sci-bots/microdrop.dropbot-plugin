@@ -1,20 +1,20 @@
 """
 Copyright 2015 Ryan Fobel
 
-This file is part of opendrop_plugin.
+This file is part of dropbot_plugin.
 
-opendrop_plugin is free software: you can redistribute it and/or modify
+dropbot_plugin is free software: you can redistribute it and/or modify
 it under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
 (at your option) any later version.
 
-opendrop_plugin is distributed in the hope that it will be useful,
+dropbot_plugin is distributed in the hope that it will be useful,
 but WITHOUT ANY WARRANTY; without even the implied warranty of
 MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
 GNU General Public License for more details.
 
 You should have received a copy of the GNU General Public License
-along with opendrop_plugin.  If not, see <http://www.gnu.org/licenses/>.
+along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
 import json
 import logging
@@ -25,10 +25,13 @@ from flatland import Integer, Float, Form, Enum
 from flatland.validation import ValueAtLeast
 from microdrop.app_context import get_app, get_hub_uri
 from microdrop.gui.protocol_grid_controller import ProtocolGridController
-from microdrop.plugin_helpers import (StepOptionsController, AppDataController, get_plugin_info)
-from microdrop.plugin_manager import (IPlugin, IWaveformGenerator, Plugin, implements, PluginGlobals, ScheduleRequest, emit_signal, get_service_instance, get_service_instance_by_name)
+from microdrop.plugin_helpers import (StepOptionsController, AppDataController)
+from microdrop.plugin_manager import (IPlugin, IWaveformGenerator, Plugin,
+                                      implements, PluginGlobals,
+                                      ScheduleRequest, emit_signal,
+                                      get_service_instance,
+                                      get_service_instance_by_name)
 from microdrop_utility.gui import yesno
-from path_helpers import path
 from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
@@ -38,6 +41,7 @@ import gtk
 import microdrop_utility as utility
 import numpy as np
 import pandas as pd
+import path_helpers as ph
 import tables
 import zmq
 
@@ -101,8 +105,7 @@ class DmfZmqPlugin(ZmqPlugin):
 
 def max_voltage(element, state):
     """Verify that the voltage is below a set maximum"""
-    service = get_service_instance_by_name(
-        get_plugin_info(path(__file__).parent).plugin_name)
+    service = get_service_instance_by_name(ph.path(__file__).parent.name)
 
     if service.control_board and \
         element.value > service.control_board.max_waveform_voltage:
@@ -115,8 +118,7 @@ def max_voltage(element, state):
 
 def check_frequency(element, state):
     """Verify that the frequency is within the valid range"""
-    service = get_service_instance_by_name(
-        get_plugin_info(path(__file__).parent).plugin_name)
+    service = get_service_instance_by_name(ph.path(__file__).parent.name)
 
     if service.control_board and \
         (element.value < service.control_board.min_waveform_frequency or \
@@ -155,8 +157,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
     )
 
+    plugin_name = ph.path(__file__).realpath().parent.name
     try:
-        version = ch.package_version('dropbot_plugin')
+        version = ch.package_version(plugin_name)
     except NameError:
         version = None
 
@@ -171,7 +174,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
     def __init__(self):
         self.control_board = None
-        self.name = get_plugin_info(path(__file__).parent).plugin_name
+        self.name = self.plugin_name
         self.connection_status = "Not connected"
         self.current_frequency = None
         self.timeout_id = None
