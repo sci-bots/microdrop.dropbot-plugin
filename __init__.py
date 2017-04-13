@@ -159,7 +159,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
     plugin_name = ph.path(__file__).realpath().parent.name
     try:
-        version = ch.package_version(plugin_name)
+        version = ch.package_version(plugin_name).get('version')
     except NameError:
         version = None
 
@@ -583,3 +583,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         return []
 
 PluginGlobals.pop_env()
+
+from ._version import get_versions
+__version__ = get_versions()['version']
+del get_versions
