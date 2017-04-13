@@ -22,6 +22,7 @@ requirements:
     - flatland-fork
     - microdrop >=2.0
     - microdrop-plugin-template
+    # TODO: **MUST** include `_version.py` file in repo, since `__init__.py` imports from it!!
     - microdrop-plugin-manager >=0.9
     - microdrop-utility
     - pandas
