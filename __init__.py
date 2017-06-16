@@ -78,9 +78,9 @@ class DmfZmqPlugin(ZmqPlugin):
         try:
             msg_frames = self.subscribe_socket.recv_multipart(zmq.NOBLOCK)
             source, target, msg_type, msg_json = msg_frames
-            if ((source == 'wheelerlab.electrode_controller_plugin') and
+            if ((source == 'microdrop.electrode_controller_plugin') and
                 (msg_type == 'execute_reply')):
-                # The 'wheelerlab.electrode_controller_plugin' plugin maintains
+                # The 'microdrop.electrode_controller_plugin' plugin maintains
                 # the requested state of each electrode.
                 msg = json.loads(msg_json)
                 if msg['content']['command'] in ('set_electrode_state',
