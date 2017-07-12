@@ -4,7 +4,7 @@ source:
   git_url: ../
 
 package:
-  name: dropbot_plugin
+  name: microdrop.dropbot-plugin
 {% if GIT_DESCRIBE_NUMBER > '0' %}
   version: {{ GIT_DESCRIBE_TAG[1:] }}+{{ GIT_DESCRIBE_NUMBER }}
 {% else %}
