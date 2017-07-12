@@ -17,12 +17,11 @@ build:
 
 requirements:
   build:
-    - conda-helpers >=0.3.post2
+    - conda-helpers >=0.4
     - dropbot
     - flatland-fork
     - microdrop >=2.0
     - microdrop-plugin-template
-    # TODO: **MUST** include `_version.py` file in repo, since `__init__.py` imports from it!!
     - microdrop-plugin-manager >=0.9
     - microdrop-utility
     - pandas
@@ -34,7 +33,7 @@ requirements:
     - zmq-plugin
 
   run:
-    - conda-helpers >=0.3.post2
+    - conda-helpers >=0.4
     - dropbot
     - flatland-fork
     - microdrop >=2.0
