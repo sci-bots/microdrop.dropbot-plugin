@@ -1,5 +1,5 @@
 """
-Copyright 2015 Ryan Fobel
+Copyright 2015-2017 Ryan Fobel and Christian Fobel
 
 This file is part of dropbot_plugin.
 
@@ -18,6 +18,7 @@ along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
 import json
 import logging
+import pkg_resources
 import warnings
 
 from dropbot import SerialProxy
@@ -219,6 +220,10 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             gobject.source_remove(self.plugin_timeout_id)
         if self.plugin is not None:
             self.plugin = None
+        if self.control_board is not None:
+            # Disconnect
+            del self.control_board
+            self.control_board = None
 
     def on_plugin_enable(self):
         super(DropBotPlugin, self).on_plugin_enable()
@@ -327,19 +332,23 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             self.connect()
             name = self.control_board.properties['package_name']
             if name != self.control_board.host_package_name:
-                raise Exception("Device is not a DropBot DX")
+                raise Exception("Device is not a DropBot")
 
             host_software_version = self.control_board.host_software_version
             remote_software_version = self.control_board.remote_software_version
 
             # Reflash the firmware if it is not the right version.
             if host_software_version != remote_software_version:
-                response = yesno("The DropBot DX firmware version (%s) "
+                response = yesno("The DropBot firmware version (%s) "
                                  "does not match the driver version (%s). "
                                  "Update firmware?" % (remote_software_version,
                                                        host_software_version))
                 if response == gtk.RESPONSE_YES:
                     self.on_flash_firmware()
+        except pkg_resources.DistributionNotFound:
+            logger.debug('No distribution found for `%s`.  This may occur if, '
+                         'e.g., `%s` is installed using `conda develop .`',
+                         name, name, exc_info=True)
         except Exception, why:
             logger.warning("%s" % why)
 
