@@ -139,24 +139,6 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     implements(IPlugin)
     implements(IWaveformGenerator)
 
-    serial_ports_ = [port for port in get_serial_ports()]
-    if len(serial_ports_):
-        default_port_ = serial_ports_[0]
-    else:
-        default_port_ = None
-
-    AppFields = Form.of(
-        Enum.named('serial_port').using(default=default_port_,
-                                        optional=True).valued(*serial_ports_),
-        Float.named('default_duration').using(default=1000,
-                                              optional=True),
-        Float.named('default_voltage').using(default=80,
-                                             optional=True),
-        Float.named('default_frequency').using(default=10e3,
-                                               optional=True),
-
-    )
-
     plugin_name = ph.path(__file__).realpath().parent.name
     try:
         version = ch.package_version(plugin_name).get('version')
@@ -182,11 +164,26 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.plugin = None
         self.plugin_timeout_id = None
 
+    @property
+    def AppFields(self):
+        serial_ports = list(get_serial_ports())
+        if len(serial_ports):
+            default_port = serial_ports[0]
+        else:
+            default_port = None
+
+        return Form.of(
+            Enum.named('serial_port').using(default=default_port,
+                                            optional=True).valued(*serial_ports),
+            Float.named('default_duration').using(default=1000, optional=True),
+            Float.named('default_voltage').using(default=80, optional=True),
+            Float.named('default_frequency').using(default=10e3,
+                                                   optional=True))
+
     def get_step_form_class(self):
         """
         Override to set default values based on their corresponding app options.
         """
-        app = get_app()
         app_values = self.get_app_values()
         return Form.of(
             Integer.named('duration').using(default=app_values['default_duration'],
@@ -200,8 +197,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             Float.named('frequency').using(default=app_values['default_frequency'],
                                            optional=True,
                                            validators=[ValueAtLeast(minimum=0),
-                                                       check_frequency]),
-    )
+                                                       check_frequency]))
+
     def update_channel_states(self, channel_states):
         # Update locally cached channel states with new modified states.
         try:
@@ -297,11 +294,13 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         serial port, one-by-one.
         """
         self.current_frequency = None
-        if len(DropBotPlugin.serial_ports_):
+        serial_ports = list(get_serial_ports())
+        if serial_ports:
             app_values = self.get_app_values()
             # try to connect to the last successful port
             try:
-                self.control_board = SerialProxy(port=str(app_values['serial_port']))
+                port = app_values.get('serial_port')
+                self.control_board = SerialProxy(port=port)
             except:
                 logger.warning('Could not connect to control board on port %s.'
                                ' Checking other ports...',
