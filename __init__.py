@@ -37,6 +37,8 @@ from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
 import conda_helpers as ch
+import dropbot as db
+import dropbot.hardware_test
 import gobject
 import gtk
 import microdrop_utility as utility
@@ -164,6 +166,65 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.channel_states = pd.Series()
         self.plugin = None
         self.plugin_timeout_id = None
+        self.menu_items = []
+
+    def create_ui(self):
+        '''
+        Create user interface elements (e.g., menu items).
+        '''
+        def _test_high_voltage(*args):
+            if self.control_board is None:
+                logger.error('DropBot is not connected.')
+            else:
+                try:
+                    mean_rms_error = db.hardware_test(self.control_board)
+                    logger.info('High-voltage error: %.2f%%', mean_rms_error)
+
+                    if mean_rms_error < .5:
+                        # Display dialog indicating RMS voltage error.
+                        dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
+                        dialog.set_title('High-voltage test passed')
+                        dialog.props.text = ('High-voltage average RMS: '
+                                             '{:.2f}%', mean_rms_error * 100)
+                        dialog.run()
+                        dialog.destroy()
+                    else:
+                        logger.warning('High-voltage average RMS: %2f%%',
+                                       mean_rms_error * 100)
+                except:
+                    logger.error('Error executing high voltage test.',
+                                 exc_info=True)
+
+        def _test_shorts(*args):
+            if self.control_board is None:
+                logger.error('DropBot is not connected.')
+            else:
+                try:
+                    shorts = db.detect_shorted_channels(self.control_board)
+
+                    if shorts:
+                        # Display dialog indicating RMS voltage error.
+                        dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
+                        dialog.set_title('No shorts detected')
+                        dialog.props.text = 'No shorts were detected on chip.'
+                        dialog.run()
+                        dialog.destroy()
+                    else:
+                        logger.warning('Shorts were detected on the following '
+                                       'channels: %s', ', '.join(map(str,
+                                                                     shorts)))
+                except:
+                    logger.error('Error executing short detection test.',
+                                 exc_info=True)
+
+        self.menu_items = [gtk.MenuItem('Test high voltage'),
+                           gtk.MenuItem('Detect shorted channels')]
+        self.menu_items[0].connect('activate', _test_high_voltage)
+        self.menu_items[1].connect('activate', _test_shorts)
+
+        app = get_app()
+        for menu_item_i in self.menu_items:
+            app.main_window_controller.menu_tools.append(menu_item_i)
 
     @property
     def AppFields(self):
@@ -227,6 +288,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
     def on_plugin_enable(self):
         super(DropBotPlugin, self).on_plugin_enable()
+        if not self.menu_items:
+            # Initialize menu user interface.
+            self.create_ui()
 
         self.cleanup_plugin()
         # Initialize 0MQ hub plugin and subscribe to hub messages.
