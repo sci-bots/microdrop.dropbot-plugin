@@ -177,7 +177,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 logger.error('DropBot is not connected.')
             else:
                 try:
-                    mean_rms_error = db.hardware_test(self.control_board)
+                    mean_rms_error = db.hardware_test.high_voltage_source_rms_error(self.control_board)
                     logger.info('High-voltage error: %.2f%%', mean_rms_error)
 
                     if mean_rms_error < .5:
@@ -200,7 +200,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 logger.error('DropBot is not connected.')
             else:
                 try:
-                    shorts = db.detect_shorted_channels(self.control_board)
+                    shorts = db.hardware_test.detect_shorted_channels(self.control_board)
 
                     if shorts:
                         # Display dialog indicating RMS voltage error.
