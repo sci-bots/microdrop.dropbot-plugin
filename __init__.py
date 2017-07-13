@@ -225,6 +225,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         app = get_app()
         for menu_item_i in self.menu_items:
             app.main_window_controller.menu_tools.append(menu_item_i)
+            menu_item_i.show()
 
     @property
     def AppFields(self):
