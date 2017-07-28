@@ -185,7 +185,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                         dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
                         dialog.set_title('High-voltage test passed')
                         dialog.props.text = ('High-voltage average RMS: '
-                                             '{:.2f}%', mean_rms_error * 100)
+                                             '{:.2f}%'.format(mean_rms_error *
+                                                              100))
                         dialog.run()
                         dialog.destroy()
                     else:
@@ -202,7 +203,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 try:
                     shorts = db.hardware_test.detect_shorted_channels(self.control_board)
 
-                    if shorts:
+                    if not shorts:
                         # Display dialog indicating RMS voltage error.
                         dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
                         dialog.set_title('No shorts detected')
