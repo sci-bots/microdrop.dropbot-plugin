@@ -142,7 +142,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     implements(IPlugin)
     implements(IWaveformGenerator)
 
-    plugin_name = ph.path(__file__).realpath().parent.name
+    plugin_name = str(ph.path(__file__).realpath().parent.name)
     try:
         version = ch.package_version(plugin_name).get('version')
     except NameError:
@@ -264,6 +264,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                                                        check_frequency]))
 
     def update_channel_states(self, channel_states):
+        logging.info('update_channel_states')
         # Update locally cached channel states with new modified states.
         try:
             self.channel_states = channel_states.combine_first(self
@@ -284,8 +285,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         if self.plugin is not None:
             self.plugin = None
         if self.control_board is not None:
-            # Disconnect
-            del self.control_board
+            self.control_board.terminate()
             self.control_board = None
 
     def on_plugin_enable(self):
@@ -322,6 +322,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.cleanup_plugin()
         try:
             self.control_board.hv_output_enabled = False
+            self.control_board.terminate()
+            self.control_board = None
         except: # ignore any exceptions (e.g., if the board is not connected)
             pass
 
@@ -364,6 +366,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         If unsuccessful, try to connect to the control board on any available
         serial port, one-by-one.
         """
+        if self.control_board:
+            self.control_board.terminate()
+            self.control_board = None
         self.current_frequency = None
         serial_ports = list(get_serial_ports())
         if serial_ports:
@@ -387,7 +392,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         """
         Check to see if:
 
-         a) The connected device is a OpenDrop
+         a) The connected device is a DropBot 
          b) The device firmware matches the host driver API version
 
         In the case where the device firmware version does not match, display a
@@ -426,20 +431,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             connected = self.control_board != None
             if not connected:
                 self.connect()
-            """
-            response = yesno("Save current control board configuration before "
-                             "flashing?")
-            if response == gtk.RESPONSE_YES:
-                self.save_config()
-            """
-            hardware_version = utility.Version.fromstring(
-                self.control_board.hardware_version
-            )
-            if connected:
-                # disconnect
-                del self.control_board
-                self.control_board = None
-            self.control_board.flash_firmware(hardware_version)
+            self.control_board.flash_firmware()
             app.main_window_controller.info("Firmware updated successfully.",
                                             "Firmware update")
         except Exception, why:
@@ -587,7 +579,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.current_frequency = frequency
 
     def on_step_options_changed(self, plugin, step_number):
-        logger.debug('[DropBotPlugin] on_step_options_changed(): %s '
+        logger.info('[DropBotPlugin] on_step_options_changed(): %s '
                      'step #%d' % (plugin, step_number))
         app = get_app()
         if (app.protocol and not app.running and not app.realtime_mode and
@@ -596,7 +588,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             self.on_step_run()
 
     def on_step_swapped(self, original_step_number, new_step_number):
-        logger.debug('[DropBotPlugin] on_step_swapped():'
+        logger.info('[DropBotPlugin] on_step_swapped():'
                      'original_step_number=%d, new_step_number=%d' %
                      (original_step_number, new_step_number))
         self.on_step_options_changed(self.name,
@@ -646,6 +638,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     ScheduleRequest(self.name,
                                     'microdrop.gui.protocol_controller'),
                     ]
+        elif function_name == 'on_step_run':
+            return [ScheduleRequest('droplet_planning_plugin', self.name)]
         elif function_name == 'on_app_options_changed':
             return [ScheduleRequest('microdrop.app', self.name)]
         elif function_name == 'on_protocol_swapped':
