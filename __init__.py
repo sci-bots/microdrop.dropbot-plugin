@@ -406,9 +406,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 raise Exception("Device is not a DropBot")
 
             host_software_version = utility.Version.fromstring(
-                self.control_board.host_software_version)
+                str(self.control_board.host_software_version))
             remote_software_version = utility.Version.fromstring(
-                self.control_board.remote_software_version)
+                str(self.control_board.remote_software_version))
 
             # Offer to reflash the firmware if the major and minor versions
             # are not not identical. If micro versions are different,
