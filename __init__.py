@@ -177,21 +177,24 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 logger.error('DropBot is not connected.')
             else:
                 try:
-                    mean_rms_error = db.hardware_test.high_voltage_source_rms_error(self.control_board)
-                    logger.info('High-voltage error: %.2f%%', mean_rms_error)
-
-                    if mean_rms_error < .5:
+                    results = db.hardware_test.test_voltage(
+                        self.control_board)
+                    v_target = results['target_voltage']
+                    v = results['measured_voltage']
+                    r = v - v_target
+                    rms_error = np.sqrt(np.mean((r / v_target)**2))
+                    logger.info('High-voltage error: %.2f%%', 100 * rms_error)
+                    if rms_error < 0.05:
                         # Display dialog indicating RMS voltage error.
                         dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
                         dialog.set_title('High-voltage test passed')
-                        dialog.props.text = ('High-voltage average RMS: '
-                                             '{:.2f}%'.format(mean_rms_error *
-                                                              100))
+                        dialog.props.text = ('High-voltage RMS error: '
+                                             '{:.2f}%'.format(100 * rms_error))
                         dialog.run()
                         dialog.destroy()
                     else:
-                        logger.warning('High-voltage average RMS: %2f%%',
-                                       mean_rms_error * 100)
+                        logger.warning('High-voltage RMS error: %.2f%%',
+                                       100 * rms_error)
                 except:
                     logger.error('Error executing high voltage test.',
                                  exc_info=True)
@@ -201,8 +204,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 logger.error('DropBot is not connected.')
             else:
                 try:
-                    shorts = db.hardware_test.detect_shorted_channels(self.control_board)
-
+                    results = db.hardware_test.test_shorts(self.control_board)
+                    shorts = results['shorts']
                     if not shorts:
                         # Display dialog indicating RMS voltage error.
                         dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
@@ -218,10 +221,64 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     logger.error('Error executing short detection test.',
                                  exc_info=True)
 
+        def _test_channels(*args):
+            if self.control_board is None:
+                logger.error('DropBot is not connected.')
+            else:
+                try:
+                    results = db.hardware_test.test_channels(self.control_board)
+                    c = np.array(results['c'])
+                    test_channels = np.array(results['test_channels'])
+                    shorts = results['shorts']
+                    n_channels = len(test_channels)
+                    n_reps = c.shape[1]
+    
+                    nc = test_channels[np.min(c, 1) < 5e-12].tolist()
+                    for x in shorts:
+                        nc.remove(x)
+
+                    if len(shorts) or len(nc):
+                        msg = ("%d of %d channels failed ( %.1f %%):\n" %
+                               (len(shorts) + len(nc), n_channels,
+                               float(len(shorts) + len(nc)) / n_channels * 100))
+                    if len(shorts):
+                        msg +=  ("    %d shorts (%.1f %%): %s" % (
+                                 len(shorts), float(len(shorts)) / 
+                                     n_channels * 100,
+                                 ", ".join([str(x) for x in shorts])))                                                
+                    if len(nc):
+                        msg +=  ("    %d no connection (%.1f %%): %s" %
+                                 (len(nc), float(len(nc)) / n_channels * 100,
+                                 ", ".join([str(x) for x in nc])))
+                        if n_reps > 1:
+                            for x in nc:
+                                n_fails = np.count_nonzero(c[x, :] < 5e-12)
+                            msg += ("\n    Channel %d failed %d of %d reps"
+                                    " (%.1f %%)" % (x, n_fails, n_reps,
+                                    100.0 * n_fails / n_reps))
+                    else:
+                        msg += "  All channels passed"
+                
+                    if len(nc)==0 and len(shorts)==0:
+                            # Display dialog indicating channel scan results.
+                            dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
+                            dialog.set_title('Channel scan')
+                            dialog.props.text = ('All channels passed.')
+                            dialog.run()
+                            dialog.destroy()
+                    else:
+                        logger.warning(msg) 
+                except:
+                    logger.error('Error executing channel scan test.',
+                                 exc_info=True)
+
+
         self.menu_items = [gtk.MenuItem('Test high voltage'),
-                           gtk.MenuItem('Detect shorted channels')]
+                           gtk.MenuItem('Detect shorted channels'),
+                           gtk.MenuItem('Scan test board')]
         self.menu_items[0].connect('activate', _test_high_voltage)
         self.menu_items[1].connect('activate', _test_shorts)
+        self.menu_items[2].connect('activate', _test_channels)
 
         app = get_app()
         for menu_item_i in self.menu_items:
@@ -494,7 +551,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 self.control_board.hv_output_enabled = True
 
             label = (self.connection_status + ', Voltage: %.1f V' %
-                 self.control_board.measured_voltage)
+                 self.control_board.measure_voltage())
             app.main_window_controller.label_control_board_status. \
                 set_markup(label)
 
