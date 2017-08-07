@@ -405,11 +405,18 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             if name != self.control_board.host_package_name:
                 raise Exception("Device is not a DropBot")
 
-            host_software_version = self.control_board.host_software_version
-            remote_software_version = self.control_board.remote_software_version
+            host_software_version = utility.Version.fromstring(
+                self.control_board.host_software_version)
+            remote_software_version = utility.Version.fromstring(
+                self.control_board.remote_software_version)
 
-            # Reflash the firmware if it is not the right version.
-            if host_software_version != remote_software_version:
+            # Offer to reflash the firmware if the major and minor versions
+            # are not not identical. If micro versions are different,
+            # the firmware is assumed to be compatible. See [1]
+            #
+            # [1]: https://github.com/wheeler-microfluidics/base-node-rpc/issues/8
+            if (host_software_version.major != remote_software_version.major or
+                host_software_version.minor != remote_software_version.minor):
                 response = yesno("The DropBot firmware version (%s) "
                                  "does not match the driver version (%s). "
                                  "Update firmware?" % (remote_software_version,
