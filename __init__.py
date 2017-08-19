@@ -57,6 +57,10 @@ warnings.simplefilter('ignore', tables.NaturalNameWarning)
 
 PluginGlobals.push_env('microdrop.managed')
 
+from ._version import get_versions
+__version__ = get_versions()['version']
+del get_versions
+
 
 class DmfZmqPlugin(ZmqPlugin):
     """
@@ -142,11 +146,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     implements(IPlugin)
     implements(IWaveformGenerator)
 
+    version = __version__
     plugin_name = str(ph.path(__file__).realpath().parent.name)
-    try:
-        version = ch.package_version(plugin_name).get('version')
-    except NameError:
-        version = None
 
     @property
     def StepFields(self):
@@ -232,7 +233,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     shorts = results['shorts']
                     n_channels = len(test_channels)
                     n_reps = c.shape[1]
-    
+
                     nc = test_channels[np.min(c, 1) < 5e-12].tolist()
                     for x in shorts:
                         nc.remove(x)
@@ -243,9 +244,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                                float(len(shorts) + len(nc)) / n_channels * 100))
                     if len(shorts):
                         msg +=  ("    %d shorts (%.1f %%): %s" % (
-                                 len(shorts), float(len(shorts)) / 
+                                 len(shorts), float(len(shorts)) /
                                      n_channels * 100,
-                                 ", ".join([str(x) for x in shorts])))                                                
+                                 ", ".join([str(x) for x in shorts])))
                     if len(nc):
                         msg +=  ("    %d no connection (%.1f %%): %s" %
                                  (len(nc), float(len(nc)) / n_channels * 100,
@@ -258,7 +259,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                                     100.0 * n_fails / n_reps))
                     else:
                         msg += "  All channels passed"
-                
+
                     if len(nc)==0 and len(shorts)==0:
                             # Display dialog indicating channel scan results.
                             dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
@@ -267,7 +268,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                             dialog.run()
                             dialog.destroy()
                     else:
-                        logger.warning(msg) 
+                        logger.warning(msg)
                 except:
                     logger.error('Error executing channel scan test.',
                                  exc_info=True)
@@ -449,7 +450,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         """
         Check to see if:
 
-         a) The connected device is a DropBot 
+         a) The connected device is a DropBot
          b) The device firmware matches the host driver API version
 
         In the case where the device firmware version does not match, display a
@@ -715,7 +716,3 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         return []
 
 PluginGlobals.pop_env()
-
-from ._version import get_versions
-__version__ = get_versions()['version']
-del get_versions
