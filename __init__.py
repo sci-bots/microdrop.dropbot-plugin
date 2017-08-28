@@ -297,16 +297,16 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                             msg += ("\n    Channel %d failed %d of %d reps"
                                     " (%.1f %%)" % (x, n_fails, n_reps,
                                     100.0 * n_fails / n_reps))
-                    else:
-                        msg += "  All channels passed"
 
                     if len(nc)==0 and len(shorts)==0:
-                            # Display dialog indicating channel scan results.
-                            dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
-                            dialog.set_title('Channel scan')
-                            dialog.props.text = ('All channels passed.')
-                            dialog.run()
-                            dialog.destroy()
+                        msg = 'All channels passed'
+                        # Display dialog indicating channel scan results.
+                        dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
+                        dialog.set_title('Channel scan')
+                        dialog.props.text = msg
+                        dialog.run()
+                        dialog.destroy()
+                        logger.info(msg)
                     else:
                         logger.warning(msg)
                 except:
