@@ -47,6 +47,10 @@ import pandas as pd
 import path_helpers as ph
 import tables
 import zmq
+import matplotlib.pyplot as plt
+from matplotlib.figure import Figure
+from matplotlib.backends.backend_gtkagg import (
+        FigureCanvasGTKAgg as FigureCanvas)
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +172,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.plugin = None
         self.plugin_timeout_id = None
         self.menu_items = []
+        self.menu = None
+        self.menu_item_root = None
 
     def create_ui(self):
         '''
@@ -185,17 +191,51 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     r = v - v_target
                     rms_error = np.sqrt(np.mean((r / v_target)**2))
                     logger.info('High-voltage error: %.2f%%', 100 * rms_error)
-                    if rms_error < 0.05:
-                        # Display dialog indicating RMS voltage error.
-                        dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
-                        dialog.set_title('High-voltage test passed')
-                        dialog.props.text = ('High-voltage RMS error: '
-                                             '{:.2f}%'.format(100 * rms_error))
-                        dialog.run()
-                        dialog.destroy()
-                    else:
-                        logger.warning('High-voltage RMS error: %.2f%%',
-                                       100 * rms_error)
+
+                    win = gtk.Window()
+                    win.set_default_size(600, 450)
+                    win.set_title("Voltage test")
+
+                    f = Figure()
+                    a = f.add_subplot(111)
+                    a.plot(v_target, v, 'o')
+                    a.plot(v_target, v_target, 'k--')
+                    a.set_xlabel('Target voltage')
+                    a.set_ylabel('Measured voltage')
+                    a.set_title('High-voltage error: %.2f%%' % (100 * rms_error))
+
+                    canvas = FigureCanvas(f)
+                    win.add(canvas)
+                    win.show_all()
+                except:
+                    logger.error('Error executing high voltage test.',
+                                 exc_info=True)
+
+        def _test_on_board_feedback_calibration(*args):
+            if self.control_board is None:
+                logger.error('DropBot is not connected.')
+            else:
+                try:
+                    results = db.hardware_test.test_on_board_feedback_calibration(
+                        self.control_board)
+                    c_measured = np.array(results['c_measured'])
+                    c_nominal = np.array([0, 10e-12, 100e-12, 470e-12])
+
+                    win = gtk.Window()
+                    win.set_default_size(600, 450)
+                    win.set_title("On-board feedback calibration")
+
+                    f = Figure()
+                    a = f.add_subplot(111)
+                    a.plot(c_nominal * 1e12, c_measured * 1e12, 'o')
+                    a.plot(c_nominal * 1e12, c_nominal * 1e12, 'k--')
+                    a.set_xlabel('Nominal capacitance (pF)')
+                    a.set_ylabel('Measured capacitance (pF)')
+                    a.set_title('Feedback calibration')
+
+                    canvas = FigureCanvas(f)
+                    win.add(canvas)
+                    win.show_all()
                 except:
                     logger.error('Error executing high voltage test.',
                                  exc_info=True)
@@ -275,15 +315,23 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
 
         self.menu_items = [gtk.MenuItem('Test high voltage'),
+                           gtk.MenuItem('On-board feedback calibration'),
                            gtk.MenuItem('Detect shorted channels'),
                            gtk.MenuItem('Scan test board')]
         self.menu_items[0].connect('activate', _test_high_voltage)
-        self.menu_items[1].connect('activate', _test_shorts)
-        self.menu_items[2].connect('activate', _test_channels)
+        self.menu_items[1].connect('activate', _test_on_board_feedback_calibration)
+        self.menu_items[2].connect('activate', _test_shorts)
+        self.menu_items[3].connect('activate', _test_channels)
 
         app = get_app()
+        self.menu = gtk.Menu()
+        self.menu.show_all()
+        self.menu_item_root = gtk.MenuItem('DropBot')
+        self.menu_item_root.set_submenu(self.menu)
+        self.menu_item_root.show_all()
+        app.main_window_controller.menu_tools.append(self.menu_item_root)
         for menu_item_i in self.menu_items:
-            app.main_window_controller.menu_tools.append(menu_item_i)
+            self.menu.append(menu_item_i)
             menu_item_i.show()
 
     @property
