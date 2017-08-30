@@ -20,9 +20,10 @@ import json
 import logging
 import pkg_resources
 import warnings
+import datetime as dt
 
 from dropbot import SerialProxy
-from flatland import Integer, Float, Form, Enum
+from flatland import Integer, Float, Form, Enum, Boolean
 from flatland.validation import ValueAtLeast
 from microdrop.app_context import get_app, get_hub_uri
 from microdrop.gui.protocol_grid_controller import ProtocolGridController
@@ -161,7 +162,6 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         """
         return self.get_step_form_class()
 
-
     def __init__(self):
         self.control_board = None
         self.name = self.plugin_name
@@ -174,11 +174,13 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.menu_items = []
         self.menu = None
         self.menu_item_root = None
+        self.diagnostics_results_dir = '.dropbot-diagnostics'
 
     def create_ui(self):
         '''
         Create user interface elements (e.g., menu items).
         '''
+
         def _test_high_voltage(*args):
             if self.control_board is None:
                 logger.error('DropBot is not connected.')
@@ -186,6 +188,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 try:
                     results = db.hardware_test.test_voltage(
                         self.control_board)
+                    db.hardware_test.log_results(results,
+                        self.diagnostics_results_dir)
                     v_target = results['target_voltage']
                     v = results['measured_voltage']
                     r = v - v_target
@@ -218,6 +222,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 try:
                     results = db.hardware_test.test_on_board_feedback_calibration(
                         self.control_board)
+                    db.hardware_test.log_results(results,
+                        self.diagnostics_results_dir)
                     c_measured = np.array(results['c_measured'])
                     c_nominal = np.array([0, 10e-12, 100e-12, 470e-12])
 
@@ -246,6 +252,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             else:
                 try:
                     results = db.hardware_test.test_shorts(self.control_board)
+                    db.hardware_test.log_results(results,
+                        self.diagnostics_results_dir)
                     shorts = results['shorts']
                     if not shorts:
                         # Display dialog indicating RMS voltage error.
@@ -268,6 +276,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             else:
                 try:
                     results = db.hardware_test.test_channels(self.control_board)
+                    db.hardware_test.log_results(results,
+                        self.diagnostics_results_dir)
                     c = np.array(results['c'])
                     test_channels = np.array(results['test_channels'])
                     shorts = results['shorts']
@@ -348,7 +358,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             Float.named('default_duration').using(default=1000, optional=True),
             Float.named('default_voltage').using(default=80, optional=True),
             Float.named('default_frequency').using(default=10e3,
-                                                   optional=True))
+                                                   optional=True),
+            Boolean.named('Auto-run diagnostic tests').using(default=True,
+                    optional=True))
 
     def get_step_form_class(self):
         """
@@ -739,6 +751,23 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
         # add metadata to experiment log
         log.metadata[self.name] = data
+
+        # run diagnostic tests
+        app_values = self.get_app_values()
+        if app_values.get('Auto-run diagnostic tests'):
+            logger.info('Running diagnostic tests')
+            tests = ['system_info',
+                     'test_i2c',
+                     'test_voltage',
+                     'test_shorts',
+                     'test_on_board_feedback_calibration'
+                    ]
+            results = {}
+        
+            for test in tests:
+                exec('results["%s"] = db.hardware_test.%s(self.control_board)'
+                     % (test, test))
+            db.hardware_test.log_results(results, self.diagnostics_results_dir)
 
     def get_schedule_requests(self, function_name):
         """
