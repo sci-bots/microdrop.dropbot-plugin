@@ -41,6 +41,7 @@ from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
 import dropbot as db
 import dropbot.hardware_test
+import functools
 import gobject
 import gtk
 import matplotlib.pyplot as plt
@@ -56,6 +57,16 @@ __version__ = get_versions()['version']
 del get_versions
 
 logger = logging.getLogger(__name__)
+
+
+def gtk_threadsafe(func):
+    gtk.gdk.threads_init()
+
+    @functools.wraps(func)
+    def _gtk_threadsafe(*args):
+        gobject.idle_add(func, *args)
+    return _gtk_threadsafe
+
 
 # Ignore natural name warnings from PyTables [1].
 #
@@ -182,7 +193,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         '''
         Create user interface elements (e.g., menu items).
         '''
-
+        @gtk_threadsafe
         def _test_high_voltage(*args):
             if self.control_board is None:
                 logger.error('DropBot is not connected.')
@@ -218,6 +229,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     logger.error('Error executing high voltage test.',
                                  exc_info=True)
 
+        @gtk_threadsafe
         def _test_on_board_feedback_calibration(*args):
             if self.control_board is None:
                 logger.error('DropBot is not connected.')
@@ -250,6 +262,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     logger.error('Error executing high voltage test.',
                                  exc_info=True)
 
+        @gtk_threadsafe
         def _test_shorts(*args):
             if self.control_board is None:
                 logger.error('DropBot is not connected.')
@@ -274,6 +287,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     logger.error('Error executing short detection test.',
                                  exc_info=True)
 
+        @gtk_threadsafe
         def _test_channels(*args):
             if self.control_board is None:
                 logger.error('DropBot is not connected.')
