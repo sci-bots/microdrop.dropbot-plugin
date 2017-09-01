@@ -20,11 +20,13 @@ import json
 import logging
 import pkg_resources
 import warnings
-import datetime as dt
 
 from dropbot import SerialProxy
 from flatland import Integer, Float, Form, Enum, Boolean
 from flatland.validation import ValueAtLeast
+from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
+                                                FigureCanvas)
+from matplotlib.figure import Figure
 from microdrop.app_context import get_app, get_hub_uri
 from microdrop.gui.protocol_grid_controller import ProtocolGridController
 from microdrop.plugin_helpers import (StepOptionsController, AppDataController)
@@ -37,21 +39,21 @@ from microdrop_utility.gui import yesno
 from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
-import conda_helpers as ch
 import dropbot as db
 import dropbot.hardware_test
 import gobject
 import gtk
+import matplotlib.pyplot as plt
 import microdrop_utility as utility
 import numpy as np
 import pandas as pd
 import path_helpers as ph
 import tables
 import zmq
-import matplotlib.pyplot as plt
-from matplotlib.figure import Figure
-from matplotlib.backends.backend_gtkagg import (
-        FigureCanvasGTKAgg as FigureCanvas)
+
+from ._version import get_versions
+__version__ = get_versions()['version']
+del get_versions
 
 logger = logging.getLogger(__name__)
 
@@ -61,10 +63,6 @@ logger = logging.getLogger(__name__)
 warnings.simplefilter('ignore', tables.NaturalNameWarning)
 
 PluginGlobals.push_env('microdrop.managed')
-
-from ._version import get_versions
-__version__ = get_versions()['version']
-del get_versions
 
 
 class DmfZmqPlugin(ZmqPlugin):
@@ -90,8 +88,8 @@ class DmfZmqPlugin(ZmqPlugin):
         try:
             msg_frames = self.subscribe_socket.recv_multipart(zmq.NOBLOCK)
             source, target, msg_type, msg_json = msg_frames
-            if ((source == 'microdrop.electrode_controller_plugin') and
-                (msg_type == 'execute_reply')):
+            if all([source == 'microdrop.electrode_controller_plugin',
+                    msg_type == 'execute_reply']):
                 # The 'microdrop.electrode_controller_plugin' plugin maintains
                 # the requested state of each electrode.
                 msg = json.loads(msg_json)
@@ -103,13 +101,14 @@ class DmfZmqPlugin(ZmqPlugin):
                 elif msg['content']['command'] == 'get_channel_states':
                     data = decode_content_data(msg)
                     self.parent.actuated_area = data['actuated_area']
-                    self.parent.channel_states = self.parent.channel_states.iloc[0:0]
+                    self.parent.channel_states =\
+                        self.parent.channel_states.iloc[0:0]
                     self.parent.update_channel_states(data['channel_states'])
             else:
                 self.most_recent = msg_json
         except zmq.Again:
             pass
-        except:
+        except Exception:
             logger.error('Error processing message from subscription '
                          'socket.', exc_info=True)
         return True
@@ -119,11 +118,11 @@ def max_voltage(element, state):
     """Verify that the voltage is below a set maximum"""
     service = get_service_instance_by_name(ph.path(__file__).parent.name)
 
-    if service.control_board and \
-        element.value > service.control_board.max_waveform_voltage:
-        return element.errors.append('Voltage exceeds the maximum value '
-                                     '(%d V).' %
-                                     service.control_board.max_waveform_voltage)
+    if service.control_board and (element.value >
+                                  service.control_board.max_waveform_voltage):
+        return element.errors.append('Voltage exceeds the maximum value (%d '
+                                     'V).' % service.control_board
+                                     .max_waveform_voltage)
     else:
         return True
 
@@ -132,14 +131,17 @@ def check_frequency(element, state):
     """Verify that the frequency is within the valid range"""
     service = get_service_instance_by_name(ph.path(__file__).parent.name)
 
-    if service.control_board and \
-        (element.value < service.control_board.min_waveform_frequency or \
-        element.value > service.control_board.max_waveform_frequency):
+    if service.control_board and (element.value <
+                                  service.control_board.min_waveform_frequency
+                                  or element.value >
+                                  service.control_board
+                                  .max_waveform_frequency):
         return element.errors.append('Frequency is outside of the valid range '
-            '(%.1f - %.1f Hz).' %
-            (service.control_board.min_waveform_frequency,
-             service.control_board.max_waveform_frequency)
-        )
+                                     '(%.1f - %.1f Hz).' %
+                                     (service.control_board
+                                      .min_waveform_frequency,
+                                      service.control_board
+                                      .max_waveform_frequency))
     else:
         return True
 
@@ -189,7 +191,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     results = db.hardware_test.test_voltage(
                         self.control_board)
                     db.hardware_test.log_results(results,
-                        self.diagnostics_results_dir)
+                                                 self.diagnostics_results_dir)
                     v_target = results['target_voltage']
                     v = results['measured_voltage']
                     r = v - v_target
@@ -206,12 +208,13 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     a.plot(v_target, v_target, 'k--')
                     a.set_xlabel('Target voltage')
                     a.set_ylabel('Measured voltage')
-                    a.set_title('High-voltage error: %.2f%%' % (100 * rms_error))
+                    a.set_title('High-voltage error: %.2f%%' % (100 *
+                                                                rms_error))
 
                     canvas = FigureCanvas(f)
                     win.add(canvas)
                     win.show_all()
-                except:
+                except Exception:
                     logger.error('Error executing high voltage test.',
                                  exc_info=True)
 
@@ -220,10 +223,11 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 logger.error('DropBot is not connected.')
             else:
                 try:
-                    results = db.hardware_test.test_on_board_feedback_calibration(
-                        self.control_board)
+                    results = \
+                        db.hardware_test.test_on_board_feedback_calibration(
+                            self.control_board)
                     db.hardware_test.log_results(results,
-                        self.diagnostics_results_dir)
+                                                 self.diagnostics_results_dir)
                     c_measured = np.array(results['c_measured'])
                     c_nominal = np.array([0, 10e-12, 100e-12, 470e-12])
 
@@ -242,7 +246,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     canvas = FigureCanvas(f)
                     win.add(canvas)
                     win.show_all()
-                except:
+                except Exception:
                     logger.error('Error executing high voltage test.',
                                  exc_info=True)
 
@@ -253,7 +257,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 try:
                     results = db.hardware_test.test_shorts(self.control_board)
                     db.hardware_test.log_results(results,
-                        self.diagnostics_results_dir)
+                                                 self.diagnostics_results_dir)
                     shorts = results['shorts']
                     if not shorts:
                         # Display dialog indicating RMS voltage error.
@@ -266,7 +270,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                         logger.warning('Shorts were detected on the following '
                                        'channels: %s', ', '.join(map(str,
                                                                      shorts)))
-                except:
+                except Exception:
                     logger.error('Error executing short detection test.',
                                  exc_info=True)
 
@@ -277,7 +281,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 try:
                     results = db.hardware_test.test_channels(self.control_board)
                     db.hardware_test.log_results(results,
-                        self.diagnostics_results_dir)
+                                                 self.diagnostics_results_dir)
                     c = np.array(results['c'])
                     test_channels = np.array(results['test_channels'])
                     shorts = results['shorts']
@@ -291,24 +295,24 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     if len(shorts) or len(nc):
                         msg = ("%d of %d channels failed ( %.1f %%):\n" %
                                (len(shorts) + len(nc), n_channels,
-                               float(len(shorts) + len(nc)) / n_channels * 100))
+                                float(len(shorts) + len(nc)) / n_channels *
+                                100))
                     if len(shorts):
-                        msg +=  ("    %d shorts (%.1f %%): %s" % (
-                                 len(shorts), float(len(shorts)) /
-                                     n_channels * 100,
-                                 ", ".join([str(x) for x in shorts])))
+                        msg += ("    %d shorts (%.1f %%): %s" %
+                                (len(shorts), float(len(shorts)) / n_channels *
+                                 100, ", ".join([str(x) for x in shorts])))
                     if len(nc):
-                        msg +=  ("    %d no connection (%.1f %%): %s" %
-                                 (len(nc), float(len(nc)) / n_channels * 100,
+                        msg += ("    %d no connection (%.1f %%): %s" %
+                                (len(nc), float(len(nc)) / n_channels * 100,
                                  ", ".join([str(x) for x in nc])))
                         if n_reps > 1:
                             for x in nc:
                                 n_fails = np.count_nonzero(c[x, :] < 5e-12)
                             msg += ("\n    Channel %d failed %d of %d reps"
-                                    " (%.1f %%)" % (x, n_fails, n_reps,
-                                    100.0 * n_fails / n_reps))
+                                    " (%.1f %%)" % (x, n_fails, n_reps, 100.0 *
+                                                    n_fails / n_reps))
 
-                    if len(nc)==0 and len(shorts)==0:
+                    if len(nc) == 0 and len(shorts) == 0:
                         msg = 'All channels passed'
                         # Display dialog indicating channel scan results.
                         dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
@@ -319,17 +323,17 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                         logger.info(msg)
                     else:
                         logger.warning(msg)
-                except:
+                except Exception:
                     logger.error('Error executing channel scan test.',
                                  exc_info=True)
-
 
         self.menu_items = [gtk.MenuItem('Test high voltage'),
                            gtk.MenuItem('On-board feedback calibration'),
                            gtk.MenuItem('Detect shorted channels'),
                            gtk.MenuItem('Scan test board')]
         self.menu_items[0].connect('activate', _test_high_voltage)
-        self.menu_items[1].connect('activate', _test_on_board_feedback_calibration)
+        self.menu_items[1].connect('activate',
+                                   _test_on_board_feedback_calibration)
         self.menu_items[2].connect('activate', _test_shorts)
         self.menu_items[3].connect('activate', _test_channels)
 
@@ -353,33 +357,34 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             default_port = None
 
         return Form.of(
-            Enum.named('serial_port').using(default=default_port,
-                                            optional=True).valued(*serial_ports),
+            Enum.named('serial_port')
+            .using(default=default_port, optional=True).valued(*serial_ports),
             Float.named('default_duration').using(default=1000, optional=True),
             Float.named('default_voltage').using(default=80, optional=True),
             Float.named('default_frequency').using(default=10e3,
                                                    optional=True),
             Boolean.named('Auto-run diagnostic tests').using(default=True,
-                    optional=True))
+                                                             optional=True))
 
     def get_step_form_class(self):
         """
         Override to set default values based on their corresponding app options.
         """
         app_values = self.get_app_values()
-        return Form.of(
-            Integer.named('duration').using(default=app_values['default_duration'],
-                                            optional=True,
-                                            validators=
-                                            [ValueAtLeast(minimum=0), ]),
-            Float.named('voltage').using(default=app_values['default_voltage'],
-                                         optional=True,
-                                         validators=[ValueAtLeast(minimum=0),
-                                                     max_voltage]),
-            Float.named('frequency').using(default=app_values['default_frequency'],
-                                           optional=True,
-                                           validators=[ValueAtLeast(minimum=0),
-                                                       check_frequency]))
+        return Form.of(Integer.named('duration')
+                       .using(default=app_values['default_duration'],
+                              optional=True,
+                              validators=[ValueAtLeast(minimum=0), ]),
+                       Float.named('voltage')
+                       .using(default=app_values['default_voltage'],
+                              optional=True,
+                              validators=[ValueAtLeast(minimum=0),
+                                          max_voltage]),
+                       Float.named('frequency')
+                       .using(default=app_values['default_frequency'],
+                              optional=True,
+                              validators=[ValueAtLeast(minimum=0),
+                                          check_frequency]))
 
     def update_channel_states(self, channel_states):
         logging.info('update_channel_states')
@@ -393,7 +398,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             logging.info('', exc_info=True)
         else:
             app = get_app()
-            connected = self.control_board != None
+            connected = self.control_board is not None
             if connected and (app.realtime_mode or app.running):
                 self.on_step_run()
 
@@ -442,7 +447,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             self.control_board.hv_output_enabled = False
             self.control_board.terminate()
             self.control_board = None
-        except: # ignore any exceptions (e.g., if the board is not connected)
+        except Exception:
+            # ignore any exceptions (e.g., if the board is not connected)
             pass
 
     def on_protocol_swapped(self, old_protocol, protocol):
@@ -471,8 +477,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         elif plugin_name == app.name:
             # Turn off all electrodes if we're not in realtime mode and not
             # running a protocol.
-            if (self.control_board and not app.realtime_mode and
-                not app.running):
+            if self.control_board and (not app.realtime_mode and
+                                       not app.running):
                 logger.info('Turning off all electrodes.')
                 self.control_board.hv_output_enabled = False
 
@@ -495,7 +501,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             try:
                 port = app_values.get('serial_port')
                 self.control_board = SerialProxy(port=port)
-            except:
+            except Exception:
                 logger.warning('Could not connect to control board on port %s.'
                                ' Checking other ports...',
                                app_values['serial_port'], exc_info=True)
@@ -533,8 +539,10 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             # the firmware is assumed to be compatible. See [1]
             #
             # [1]: https://github.com/wheeler-microfluidics/base-node-rpc/issues/8
-            if (host_software_version.major != remote_software_version.major or
-                host_software_version.minor != remote_software_version.minor):
+            if any([host_software_version.major !=
+                    remote_software_version.major,
+                    host_software_version.minor !=
+                    remote_software_version.minor]):
                 response = yesno("The DropBot firmware version (%s) "
                                  "does not match the driver version (%s). "
                                  "Update firmware?" % (remote_software_version,
@@ -553,7 +561,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     def on_flash_firmware(self, widget=None, data=None):
         app = get_app()
         try:
-            connected = self.control_board != None
+            connected = self.control_board is not None
             if not connected:
                 self.connect()
             self.control_board.flash_firmware()
@@ -566,17 +574,18 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     def update_connection_status(self):
         self.connection_status = "Not connected"
         app = get_app()
-        connected = self.control_board != None
+        connected = self.control_board is not None
         if connected:
             properties = self.control_board.properties
             version = self.control_board.hardware_version
             n_channels = self.control_board.number_of_channels
             id = self.control_board.id
             uuid = self.control_board.uuid
-            self.connection_status = ('%s v%s (Firmware: %s, id: %s, uuid: %s)\n'
-                '%d channels' % (properties['display_name'], version,
-                                 properties['software_version'], id, str(uuid)[:8],
-                                 n_channels))
+            self.connection_status = ('%s v%s (Firmware: %s, id: %s, uuid: '
+                                      '%s)\n' '%d channels' %
+                                      (properties['display_name'], version,
+                                       properties['software_version'], id,
+                                       str(uuid)[:8], n_channels))
 
         app.main_window_controller.label_control_board_status\
            .set_text(self.connection_status)
@@ -612,10 +621,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 self.control_board.hv_output_enabled = True
 
             label = (self.connection_status + ', Voltage: %.1f V' %
-                 self.control_board.measure_voltage())
+                     self.control_board.measure_voltage())
             app.main_window_controller.label_control_board_status. \
                 set_markup(label)
-
 
             self.control_board.set_state_of_channels(channel_states)
 
@@ -704,8 +712,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.current_frequency = frequency
 
     def on_step_options_changed(self, plugin, step_number):
-        logger.info('[DropBotPlugin] on_step_options_changed(): %s '
-                     'step #%d' % (plugin, step_number))
+        logger.info('[DropBotPlugin] on_step_options_changed(): %s step #%d',
+                    plugin, step_number)
         app = get_app()
         if (app.protocol and not app.running and not app.realtime_mode and
             (plugin == 'microdrop.gui.dmf_device_controller' or plugin ==
@@ -714,8 +722,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
     def on_step_swapped(self, original_step_number, new_step_number):
         logger.info('[DropBotPlugin] on_step_swapped():'
-                     'original_step_number=%d, new_step_number=%d' %
-                     (original_step_number, new_step_number))
+                    'original_step_number=%d, new_step_number=%d',
+                    original_step_number, new_step_number)
         self.on_step_options_changed(self.name,
                                      get_app().protocol.current_step_number)
 
@@ -727,11 +735,12 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             if val:
                 return
 
-        # add the name, hardware version, id, and firmware version to the experiment
-        # log metadata
+        # add the name, hardware version, id, and firmware version to the
+        # experiment log metadata
         data = {}
         if self.control_board:
-            data["control board name"] = self.control_board.properties['display_name']
+            data["control board name"] = \
+                self.control_board.properties['display_name']
             data["control board id"] = \
                 self.control_board.id
             data["control board uuid"] = \
@@ -739,7 +748,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             data["control board hardware version"] = (self.control_board
                                                       .hardware_version)
             data["control board software version"] = (self.control_board
-                                                      .properties['software_version'])
+                                                      .properties
+                                                      ['software_version'])
             # add info about the devices on the i2c bus
             """
             try:
@@ -760,10 +770,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                      'test_i2c',
                      'test_voltage',
                      'test_shorts',
-                     'test_on_board_feedback_calibration'
-                    ]
+                     'test_on_board_feedback_calibration']
             results = {}
-        
+
             for test in tests:
                 exec('results["%s"] = db.hardware_test.%s(self.control_board)'
                      % (test, test))
@@ -791,5 +800,6 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             return [ScheduleRequest('microdrop.gui.experiment_log_controller',
                                     self.name)]
         return []
+
 
 PluginGlobals.pop_env()
