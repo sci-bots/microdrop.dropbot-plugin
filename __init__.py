@@ -550,21 +550,27 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             remote_software_version = utility.Version.fromstring(
                 str(self.control_board.remote_software_version))
 
-            # Offer to reflash the firmware if the major and minor versions
-            # are not not identical. If micro versions are different,
-            # the firmware is assumed to be compatible. See [1]
-            #
-            # [1]: https://github.com/wheeler-microfluidics/base-node-rpc/issues/8
-            if any([host_software_version.major !=
-                    remote_software_version.major,
-                    host_software_version.minor !=
-                    remote_software_version.minor]):
-                response = yesno("The DropBot firmware version (%s) "
-                                 "does not match the driver version (%s). "
-                                 "Update firmware?" % (remote_software_version,
-                                                       host_software_version))
-                if response == gtk.RESPONSE_YES:
-                    self.on_flash_firmware()
+            @gtk_threadsafe
+            def _firmware_check():
+                # Offer to reflash the firmware if the major and minor versions
+                # are not not identical. If micro versions are different, the
+                # firmware is assumed to be compatible. See [1]
+                #
+                # [1]: https://github.com/wheeler-microfluidics/base-node-rpc/issues/8
+                if any([host_software_version.major !=
+                        remote_software_version.major,
+                        host_software_version.minor !=
+                        remote_software_version.minor]):
+                    response = yesno("The DropBot firmware version (%s) does "
+                                     "not match the driver version (%s). "
+                                     "Update firmware?" %
+                                     (remote_software_version,
+                                      host_software_version))
+                    if response == gtk.RESPONSE_YES:
+                        self.on_flash_firmware()
+
+            # Call as thread-safe function, since function uses GTK.
+            _firmware_check()
         except pkg_resources.DistributionNotFound:
             logger.debug('No distribution found for `%s`.  This may occur if, '
                          'e.g., `%s` is installed using `conda develop .`',
