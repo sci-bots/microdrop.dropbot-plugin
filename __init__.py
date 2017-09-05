@@ -428,8 +428,10 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     def on_plugin_enable(self):
         super(DropBotPlugin, self).on_plugin_enable()
         if not self.menu_items:
-            # Initialize menu user interface.
-            self.create_ui()
+            # Schedule initialization of menu user interface.  Calling
+            # `create_ui()` directly is not thread-safe, since it includes GTK
+            # code.
+            gobject.idle_add(self.create_ui)
 
         self.cleanup_plugin()
         # Initialize 0MQ hub plugin and subscribe to hub messages.
