@@ -41,6 +41,7 @@ from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
 import dropbot as db
 import dropbot.hardware_test
+import functools
 import gobject
 import gtk
 import matplotlib.pyplot as plt
@@ -56,6 +57,16 @@ __version__ = get_versions()['version']
 del get_versions
 
 logger = logging.getLogger(__name__)
+
+
+def gtk_threadsafe(func):
+    gtk.gdk.threads_init()
+
+    @functools.wraps(func)
+    def _gtk_threadsafe(*args):
+        gobject.idle_add(func, *args)
+    return _gtk_threadsafe
+
 
 # Ignore natural name warnings from PyTables [1].
 #
@@ -182,7 +193,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         '''
         Create user interface elements (e.g., menu items).
         '''
-
+        @gtk_threadsafe
         def _test_high_voltage(*args):
             if self.control_board is None:
                 logger.error('DropBot is not connected.')
@@ -218,6 +229,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     logger.error('Error executing high voltage test.',
                                  exc_info=True)
 
+        @gtk_threadsafe
         def _test_on_board_feedback_calibration(*args):
             if self.control_board is None:
                 logger.error('DropBot is not connected.')
@@ -250,6 +262,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     logger.error('Error executing high voltage test.',
                                  exc_info=True)
 
+        @gtk_threadsafe
         def _test_shorts(*args):
             if self.control_board is None:
                 logger.error('DropBot is not connected.')
@@ -274,6 +287,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     logger.error('Error executing short detection test.',
                                  exc_info=True)
 
+        @gtk_threadsafe
         def _test_channels(*args):
             if self.control_board is None:
                 logger.error('DropBot is not connected.')
@@ -414,8 +428,10 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     def on_plugin_enable(self):
         super(DropBotPlugin, self).on_plugin_enable()
         if not self.menu_items:
-            # Initialize menu user interface.
-            self.create_ui()
+            # Schedule initialization of menu user interface.  Calling
+            # `create_ui()` directly is not thread-safe, since it includes GTK
+            # code.
+            gobject.idle_add(self.create_ui)
 
         self.cleanup_plugin()
         # Initialize 0MQ hub plugin and subscribe to hub messages.
@@ -534,21 +550,27 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             remote_software_version = utility.Version.fromstring(
                 str(self.control_board.remote_software_version))
 
-            # Offer to reflash the firmware if the major and minor versions
-            # are not not identical. If micro versions are different,
-            # the firmware is assumed to be compatible. See [1]
-            #
-            # [1]: https://github.com/wheeler-microfluidics/base-node-rpc/issues/8
-            if any([host_software_version.major !=
-                    remote_software_version.major,
-                    host_software_version.minor !=
-                    remote_software_version.minor]):
-                response = yesno("The DropBot firmware version (%s) "
-                                 "does not match the driver version (%s). "
-                                 "Update firmware?" % (remote_software_version,
-                                                       host_software_version))
-                if response == gtk.RESPONSE_YES:
-                    self.on_flash_firmware()
+            @gtk_threadsafe
+            def _firmware_check():
+                # Offer to reflash the firmware if the major and minor versions
+                # are not not identical. If micro versions are different, the
+                # firmware is assumed to be compatible. See [1]
+                #
+                # [1]: https://github.com/wheeler-microfluidics/base-node-rpc/issues/8
+                if any([host_software_version.major !=
+                        remote_software_version.major,
+                        host_software_version.minor !=
+                        remote_software_version.minor]):
+                    response = yesno("The DropBot firmware version (%s) does "
+                                     "not match the driver version (%s). "
+                                     "Update firmware?" %
+                                     (remote_software_version,
+                                      host_software_version))
+                    if response == gtk.RESPONSE_YES:
+                        self.on_flash_firmware()
+
+            # Call as thread-safe function, since function uses GTK.
+            _firmware_check()
         except pkg_resources.DistributionNotFound:
             logger.debug('No distribution found for `%s`.  This may occur if, '
                          'e.g., `%s` is installed using `conda develop .`',
