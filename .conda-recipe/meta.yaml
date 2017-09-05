@@ -29,7 +29,7 @@ requirements:
     - pip-helpers
     - pytables
     - pyyaml
-    - wheeler.pygtkhelpers
+    - wheeler.pygtkhelpers >=0.18
     - zmq-plugin
 
   run:
@@ -44,7 +44,7 @@ requirements:
     - pip-helpers
     - pytables
     - pyyaml
-    - wheeler.pygtkhelpers
+    - wheeler.pygtkhelpers >=0.18
     - zmq-plugin
 
 test:

@@ -36,15 +36,14 @@ from microdrop.plugin_manager import (IPlugin, IWaveformGenerator, Plugin,
                                       get_service_instance,
                                       get_service_instance_by_name)
 from microdrop_utility.gui import yesno
+from pygtkhelpers.gthreads import gtk_threadsafe
 from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
 import dropbot as db
 import dropbot.hardware_test
-import functools
 import gobject
 import gtk
-import matplotlib.pyplot as plt
 import microdrop_utility as utility
 import numpy as np
 import pandas as pd
@@ -57,15 +56,6 @@ __version__ = get_versions()['version']
 del get_versions
 
 logger = logging.getLogger(__name__)
-
-
-def gtk_threadsafe(func):
-    gtk.gdk.threads_init()
-
-    @functools.wraps(func)
-    def _gtk_threadsafe(*args):
-        gobject.idle_add(func, *args)
-    return _gtk_threadsafe
 
 
 # Ignore natural name warnings from PyTables [1].
