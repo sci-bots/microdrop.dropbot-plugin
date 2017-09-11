@@ -18,7 +18,8 @@ build:
 requirements:
   build:
     - conda-helpers >=0.4
-    - dropbot >=1.25
+    # .. versionchanged:: 0.14
+    - dropbot >=1.30.1
     - flatland-fork
     - microdrop >=2.0
     - microdrop-plugin-template
@@ -34,7 +35,8 @@ requirements:
 
   run:
     - conda-helpers >=0.4
-    - dropbot >=1.25
+    # .. versionchanged:: 0.14
+    - dropbot >=1.30.1
     - flatland-fork
     - microdrop >=2.0
     - microdrop-plugin-template

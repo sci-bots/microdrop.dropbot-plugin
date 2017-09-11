@@ -43,6 +43,7 @@ from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
 import dropbot as db
 import dropbot.hardware_test
+import dropbot.self_test
 import gobject
 import gtk
 import microdrop_utility as utility
@@ -146,6 +147,82 @@ def check_frequency(element, state):
                                       .max_waveform_frequency))
     else:
         return True
+
+
+def results_dialog(name, results, axis_count=1, parent=None):
+    '''
+    Given the name of a test and the corresponding results object, generate a
+    GTK dialog displaying:
+
+     - The formatted text output of the results
+     - The corresponding axis plot(s) (if applicable).
+
+    .. versionadded:: 0.14
+
+    Parameters
+    ----------
+    name : str
+        Test name (e.g., ``voltage``, ``channels``, etc.).
+    results : dict
+        Results from one or more :module:`dropbot.self_test` tests.
+    axis_count : int, optional
+        The number of figure axes required for plotting.
+    parent : gtk.Window, optional
+        The parent window of the dialog.
+
+        This allows, for example, the dialog to be launched in front of the
+        parent window and to disable controls on the parent window until the
+        dialog is closed.
+    '''
+    # Resolve function for formatting results for specified test.
+    format_func = getattr(db.self_test, 'format_%s_results' % name)
+    try:
+        # Resolve function for plotting results for specified test (if
+        # available).
+        plot_func = getattr(db.self_test, 'plot_%s_results' % name)
+    except AttributeError:
+        plot_func = None
+
+    dialog = gtk.Dialog(parent=parent)
+    title = re.sub(r'^test_', '', name).replace('_', ' ').title()
+    dialog.set_title(title)
+    dialog.props.destroy_with_parent = True
+    dialog.props.window_position = gtk.WIN_POS_MOUSE
+
+    label = gtk.Label()
+    label.props.use_markup = True
+    message = format_func(results[name])
+    label.set_markup('<span face="monospace">{}</span>'.format(message))
+
+    content_area = dialog.get_content_area()
+    content_area.pack_start(label, fill=False, expand=False, padding=5)
+
+    # Allocate minimum of 150 pixels height for report text.
+    row_heights = [150]
+
+    if plot_func is not None:
+        # Plotting function is available.
+        fig = Figure()
+        canvas = FigureCanvas(fig)
+        if axis_count > 1:
+            # Plotting function plots to more than one axis.
+            axes = [fig.add_subplot(axis_count, 1, i + 1)
+                    for i in range(axis_count)]
+            plot_func(results[name], axes=axes)
+        else:
+            # Plotting function plots to a single axis.
+            axis = fig.add_subplot(111)
+            plot_func(results[name], axis=axis)
+
+        # Allocate minimum of 300 pixels height for report text.
+        row_heights += axis_count * [300]
+        fig.tight_layout()
+        content_area.pack_start(canvas, fill=True, expand=True, padding=0)
+
+    # Allocate minimum pixels height based on the number of axes.
+    dialog.set_default_size(600, sum(row_heights))
+    content_area.show_all()
+    return dialog
 
 
 def require_connection(func):
