@@ -179,6 +179,16 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.menu_item_root = None
         self.diagnostics_results_dir = '.dropbot-diagnostics'
 
+    @property
+    def status(self):
+        '''
+        .. versionadded:: 0.14
+        '''
+        if self.control_board is None:
+            return 'disconnected'
+        else:
+            return 'connected'
+
     def create_ui(self):
         '''
         Create user interface elements (e.g., menu items).
