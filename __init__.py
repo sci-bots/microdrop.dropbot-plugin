@@ -378,7 +378,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         return Form.of(Integer.named('duration')
                        .using(default=app_values['default_duration'],
                               optional=True,
-                              validators=[ValueAtLeast(minimum=0), ]),
+                              validators=[ValueAtLeast(minimum=0)]),
                        Float.named('voltage')
                        .using(default=app_values['default_voltage'],
                               optional=True,
@@ -584,6 +584,12 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.check_device_name_and_version()
 
     def update_connection_status(self):
+        '''
+        Update connection status message and corresponding UI label.
+
+        .. versionchanged:: 0.14
+            Schedule update of control board status label in main GTK thread.
+        '''
         self.connection_status = "Not connected"
         app = get_app()
         connected = self.control_board is not None
@@ -599,8 +605,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                                        properties['software_version'], id,
                                        str(uuid)[:8], n_channels))
 
-        app.main_window_controller.label_control_board_status\
-           .set_text(self.connection_status)
+        # Schedule update of control board status label in main GTK thread.
+        gobject.idle_add(app.main_window_controller.label_control_board_status
+                         .set_text, self.connection_status)
 
     def on_step_run(self):
         """
@@ -610,6 +617,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         signal once they have completed the step. The protocol controller
         will wait until all plugins have completed the current step before
         proceeding.
+
+        .. versionchanged:: 0.14
+            Schedule update of control board status label in main GTK thread.
         """
         logger.debug('[DropBotPlugin] on_step_run()')
         self._kill_running_step()
@@ -634,8 +644,10 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
             label = (self.connection_status + ', Voltage: %.1f V' %
                      self.control_board.measure_voltage())
-            app.main_window_controller.label_control_board_status. \
-                set_markup(label)
+
+            # Schedule update of control board status label in main GTK thread.
+            gobject.idle_add(app.main_window_controller
+                             .label_control_board_status.set_markup, label)
 
             self.control_board.set_state_of_channels(channel_states)
 
