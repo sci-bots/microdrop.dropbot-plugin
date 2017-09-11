@@ -17,9 +17,12 @@ You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
 from functools import wraps
+import datetime as dt
 import json
 import logging
 import pkg_resources
+import re
+import types
 import warnings
 
 from dropbot import SerialProxy
@@ -46,6 +49,11 @@ import dropbot.hardware_test
 import dropbot.self_test
 import gobject
 import gtk
+# XXX Use `json_tricks` rather than standard `json` to support serializing
+# [Numpy arrays and scalars][1].
+#
+# [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
+import json_tricks
 import microdrop_utility as utility
 import numpy as np
 import pandas as pd
@@ -56,6 +64,10 @@ import zmq
 from ._version import get_versions
 __version__ = get_versions()['version']
 del get_versions
+
+# Prevent warning about potential future changes to Numpy scalar encoding
+# behaviour.
+json_tricks.NumpyEncoder.SHOW_SCALAR_WARNING = False
 
 logger = logging.getLogger(__name__)
 
@@ -310,178 +322,122 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         else:
             return 'connected'
 
+    @gtk_threadsafe  # Execute in GTK main thread
+    @error_ignore(lambda exception, func, self, test_name, *args:
+                  logger.error('Error executing: "%s"', test_name,
+                               exc_info=True))
+    @require_connection  # Display error dialog if DropBot is not connected.
+    def execute_test(self, test_name, axis_count=1):
+        '''
+        Run single DropBot on-board self-diagnostic test.
+
+        Record test results as JSON and display dialog to show text summary
+        (and plot, where applicable).
+
+        .. versionadded:: 0.14
+        '''
+        test_func = getattr(db.hardware_test, test_name)
+        results = {test_name: test_func(self.control_board)}
+        db.hardware_test.log_results(results, self.diagnostics_results_dir)
+        format_func = getattr(db.self_test, 'format_%s_results' % test_name)
+        message = format_func(results[test_name])
+        map(logger.info, map(unicode.rstrip, unicode(message).splitlines()))
+
+        app = get_app()
+        parent = app.main_window_controller.view
+        dialog = results_dialog(test_name, results, parent=parent,
+                                axis_count=axis_count)
+        dialog.run()
+        dialog.destroy()
+
+    @gtk_threadsafe  # Execute in GTK main thread
+    @error_ignore(lambda *args:
+                  logger.error('Error executing DropBot self tests.',
+                               exc_info=True))
+    @require_connection  # Display error dialog if DropBot is not connected.
+    def run_all_tests(self):
+        '''
+        Run all DropBot on-board self-diagnostic tests.
+
+        Record test results as JSON and results summary as a Word document.
+
+        .. versionadded:: 0.14
+        '''
+        results = db.self_test.self_test(self.control_board)
+        results_dir = ph.path(self.diagnostics_results_dir)
+        results_dir.makedirs_p()
+
+        # Create unique output filenames based on current timestamp.
+        timestamp = dt.datetime.now().isoformat().replace(':', '_')
+        json_path = results_dir.joinpath('results-%s.json' % timestamp)
+        report_path = results_dir.joinpath('results-%s.docx' % timestamp)
+
+        # Write test results encoded as JSON.
+        with json_path.open('w') as output:
+            # XXX Use `json_tricks` rather than standard `json` to support
+            # serializing [Numpy arrays and scalars][1].
+            #
+            # [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
+            output.write(json_tricks.dumps(results, indent=4))
+
+        # Generate test result summary report as Word document.
+        db.self_test.generate_report(results, output_path=report_path,
+                                     force=True)
+        # Launch Word document report.
+        report_path.launch()
+
     def create_ui(self):
         '''
         Create user interface elements (e.g., menu items).
+
+        .. versionchanged:: 0.14
+            Add "Run all on-board self-tests..." menu item.
+
+            Add "On-board self-tests" menu.
         '''
-        @gtk_threadsafe
-        def _test_high_voltage(*args):
-            if self.control_board is None:
-                logger.error('DropBot is not connected.')
-            else:
-                try:
-                    results = db.hardware_test.test_voltage(
-                        self.control_board)
-                    db.hardware_test.log_results(results,
-                                                 self.diagnostics_results_dir)
-                    v_target = results['target_voltage']
-                    v = results['measured_voltage']
-                    r = v - v_target
-                    rms_error = np.sqrt(np.mean((r / v_target)**2))
-                    logger.info('High-voltage error: %.2f%%', 100 * rms_error)
+        # Create head for DropBot on-board tests sub-menu.
+        tests_menu_head = gtk.MenuItem('On-board self-_tests')
 
-                    win = gtk.Window()
-                    win.set_default_size(600, 450)
-                    win.set_title("Voltage test")
-
-                    f = Figure()
-                    a = f.add_subplot(111)
-                    a.plot(v_target, v, 'o')
-                    a.plot(v_target, v_target, 'k--')
-                    a.set_xlabel('Target voltage')
-                    a.set_ylabel('Measured voltage')
-                    a.set_title('High-voltage error: %.2f%%' % (100 *
-                                                                rms_error))
-
-                    canvas = FigureCanvas(f)
-                    win.add(canvas)
-                    win.show_all()
-                except Exception:
-                    logger.error('Error executing high voltage test.',
-                                 exc_info=True)
-
-        @gtk_threadsafe
-        def _test_on_board_feedback_calibration(*args):
-            if self.control_board is None:
-                logger.error('DropBot is not connected.')
-            else:
-                try:
-                    results = \
-                        db.hardware_test.test_on_board_feedback_calibration(
-                            self.control_board)
-                    db.hardware_test.log_results(results,
-                                                 self.diagnostics_results_dir)
-                    c_measured = np.array(results['c_measured'])
-                    c_nominal = np.array([0, 10e-12, 100e-12, 470e-12])
-
-                    win = gtk.Window()
-                    win.set_default_size(600, 450)
-                    win.set_title("On-board feedback calibration")
-
-                    f = Figure()
-                    a = f.add_subplot(111)
-                    a.plot(c_nominal * 1e12, c_measured * 1e12, 'o')
-                    a.plot(c_nominal * 1e12, c_nominal * 1e12, 'k--')
-                    a.set_xlabel('Nominal capacitance (pF)')
-                    a.set_ylabel('Measured capacitance (pF)')
-                    a.set_title('Feedback calibration')
-
-                    canvas = FigureCanvas(f)
-                    win.add(canvas)
-                    win.show_all()
-                except Exception:
-                    logger.error('Error executing high voltage test.',
-                                 exc_info=True)
-
-        @gtk_threadsafe
-        def _test_shorts(*args):
-            if self.control_board is None:
-                logger.error('DropBot is not connected.')
-            else:
-                try:
-                    results = db.hardware_test.test_shorts(self.control_board)
-                    db.hardware_test.log_results(results,
-                                                 self.diagnostics_results_dir)
-                    shorts = results['shorts']
-                    if not shorts:
-                        # Display dialog indicating RMS voltage error.
-                        dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
-                        dialog.set_title('No shorts detected')
-                        dialog.props.text = 'No shorts were detected on chip.'
-                        dialog.run()
-                        dialog.destroy()
-                    else:
-                        logger.warning('Shorts were detected on the following '
-                                       'channels: %s', ', '.join(map(str,
-                                                                     shorts)))
-                except Exception:
-                    logger.error('Error executing short detection test.',
-                                 exc_info=True)
-
-        @gtk_threadsafe
-        def _test_channels(*args):
-            if self.control_board is None:
-                logger.error('DropBot is not connected.')
-            else:
-                try:
-                    results = db.hardware_test.test_channels(self.control_board)
-                    db.hardware_test.log_results(results,
-                                                 self.diagnostics_results_dir)
-                    c = np.array(results['c'])
-                    test_channels = np.array(results['test_channels'])
-                    shorts = results['shorts']
-                    n_channels = len(test_channels)
-                    n_reps = c.shape[1]
-
-                    nc = test_channels[np.min(c, 1) < 5e-12].tolist()
-                    for x in shorts:
-                        nc.remove(x)
-
-                    if len(shorts) or len(nc):
-                        msg = ("%d of %d channels failed ( %.1f %%):\n" %
-                               (len(shorts) + len(nc), n_channels,
-                                float(len(shorts) + len(nc)) / n_channels *
-                                100))
-                    if len(shorts):
-                        msg += ("    %d shorts (%.1f %%): %s" %
-                                (len(shorts), float(len(shorts)) / n_channels *
-                                 100, ", ".join([str(x) for x in shorts])))
-                    if len(nc):
-                        msg += ("    %d no connection (%.1f %%): %s" %
-                                (len(nc), float(len(nc)) / n_channels * 100,
-                                 ", ".join([str(x) for x in nc])))
-                        if n_reps > 1:
-                            for x in nc:
-                                n_fails = np.count_nonzero(c[x, :] < 5e-12)
-                            msg += ("\n    Channel %d failed %d of %d reps"
-                                    " (%.1f %%)" % (x, n_fails, n_reps, 100.0 *
-                                                    n_fails / n_reps))
-
-                    if len(nc) == 0 and len(shorts) == 0:
-                        msg = 'All channels passed'
-                        # Display dialog indicating channel scan results.
-                        dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK)
-                        dialog.set_title('Channel scan')
-                        dialog.props.text = msg
-                        dialog.run()
-                        dialog.destroy()
-                        logger.info(msg)
-                    else:
-                        logger.warning(msg)
-                except Exception:
-                    logger.error('Error executing channel scan test.',
-                                 exc_info=True)
-
-        self.menu_items = [gtk.MenuItem('Test high voltage'),
-                           gtk.MenuItem('On-board feedback calibration'),
-                           gtk.MenuItem('Detect shorted channels'),
-                           gtk.MenuItem('Scan test board')]
-        self.menu_items[0].connect('activate', _test_high_voltage)
-        self.menu_items[1].connect('activate',
-                                   _test_on_board_feedback_calibration)
-        self.menu_items[2].connect('activate', _test_shorts)
-        self.menu_items[3].connect('activate', _test_channels)
-
+        # Create main DropBot menu.
+        self.menu_items = [gtk.MenuItem('Run _all on-board self-tests...'),
+                           gtk.SeparatorMenuItem(), tests_menu_head]
+        self.menu_items[0].connect('activate', lambda menu_item:
+                                   self.run_all_tests())
         app = get_app()
         self.menu = gtk.Menu()
         self.menu.show_all()
-        self.menu_item_root = gtk.MenuItem('DropBot')
+        self.menu_item_root = gtk.MenuItem('_DropBot')
         self.menu_item_root.set_submenu(self.menu)
         self.menu_item_root.show_all()
-        app.main_window_controller.menu_tools.append(self.menu_item_root)
         for menu_item_i in self.menu_items:
             self.menu.append(menu_item_i)
             menu_item_i.show()
+
+        # Add main DropBot menu to MicroDrop `Tools` menu.
+        app.main_window_controller.menu_tools.append(self.menu_item_root)
+
+        # Create DropBot on-board tests sub-menu.
+        tests_menu = gtk.Menu()
+        tests_menu_head.set_submenu(tests_menu)
+
+        # List of on-board self-tests.
+        tests = [{'test_name': 'test_voltage', 'title': 'Test high _voltage'},
+                 {'test_name': 'test_on_board_feedback_calibration',
+                  'title': 'On-board _feedback calibration'},
+                 {'test_name': 'test_shorts', 'title': 'Detect _shorted '
+                  'channels'},
+                 {'test_name': 'test_channels', 'title': 'Scan test _board'}]
+
+        # Add a menu item for each test to on-board tests sub-menu.
+        for i, test_i in enumerate(tests):
+            axis_count_i = 2 if test_i['test_name'] == 'test_channels' else 1
+            menu_item_i = gtk.MenuItem(test_i['title'])
+            menu_item_i.connect('activate', lambda menu_item, test_name,
+                                axis_count: self.execute_test(test_name,
+                                                              axis_count),
+                                test_i['test_name'], axis_count_i)
+            menu_item_i.show()
+            tests_menu.append(menu_item_i)
 
     @property
     def AppFields(self):

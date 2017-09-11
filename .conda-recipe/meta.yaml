@@ -21,6 +21,7 @@ requirements:
     # .. versionchanged:: 0.14
     - dropbot >=1.30.1
     - flatland-fork
+    - json-tricks >=3.8.0
     - microdrop >=2.0
     - microdrop-plugin-template
     - microdrop-plugin-manager >=0.14
@@ -38,6 +39,7 @@ requirements:
     # .. versionchanged:: 0.14
     - dropbot >=1.30.1
     - flatland-fork
+    - json-tricks >=3.8.0
     - microdrop >=2.0
     - microdrop-plugin-template
     - microdrop-utility
