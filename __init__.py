@@ -16,6 +16,7 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
+from functools import wraps
 import json
 import logging
 import pkg_resources
@@ -145,6 +146,49 @@ def check_frequency(element, state):
                                       .max_waveform_frequency))
     else:
         return True
+
+
+def require_connection(func):
+    '''
+    Decorator to require DropBot connection.
+    '''
+    @wraps(func)
+    def _wrapped(self, *args, **kwargs):
+        if self.status != 'connected':
+            logger.error('DropBot is not connected.')
+        else:
+            return func(self, *args, **kwargs)
+    return _wrapped
+
+
+def error_ignore(on_error=None):
+    '''
+    Generate decorator for ignoring errors.
+
+    Parameters
+    ----------
+    on_error : str or callable, optional
+        Error message to log, or function to call if error occurs.
+
+    Returns
+    -------
+    function
+        Decorator function.
+    '''
+    def _decorator(func):
+        @wraps(func)
+        def _wrapped(*args, **kwargs):
+            try:
+                return func(*args, **kwargs)
+            except Exception, exception:
+                if isinstance(on_error, types.StringTypes):
+                    print on_error
+                elif callable(on_error):
+                    on_error(exception, func, *args, **kwargs)
+                else:
+                    pass
+        return _wrapped
+    return _decorator
 
 
 class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
