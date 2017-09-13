@@ -24,6 +24,7 @@ import pkg_resources
 import re
 import types
 import warnings
+import webbrowser
 
 from dropbot import SerialProxy
 from flatland import Integer, Float, Form, Enum, Boolean
@@ -394,15 +395,22 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             Add "Run all on-board self-tests..." menu item.
 
             Add "On-board self-tests" menu.
+
+        .. versionchanged:: 0.15
+            Add "Help" menu item.
         '''
         # Create head for DropBot on-board tests sub-menu.
         tests_menu_head = gtk.MenuItem('On-board self-_tests')
 
         # Create main DropBot menu.
         self.menu_items = [gtk.MenuItem('Run _all on-board self-tests...'),
+                           gtk.MenuItem('_Help...'),
                            gtk.SeparatorMenuItem(), tests_menu_head]
         self.menu_items[0].connect('activate', lambda menu_item:
                                    self.run_all_tests())
+        help_url = 'https://github.com/sci-bots/microdrop.dropbot-plugin/wiki/Quick-start-guide'
+        self.menu_items[1].connect('activate', lambda menu_item:
+                                   webbrowser.open_new_tab(help_url))
         app = get_app()
         self.menu = gtk.Menu()
         self.menu.show_all()
