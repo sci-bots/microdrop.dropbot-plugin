@@ -281,6 +281,98 @@ def error_ignore(on_error=None):
     return _decorator
 
 
+import types
+import itertools as it
+import threading
+
+
+def animation_dialog(images, delay_s=1., loop=True, **kwargs):
+    '''
+    Parameters
+    ----------
+    images : list
+        Filepaths to images or :class:`gtk.Pixbuf` instances.
+    delay_s : float, optional
+        Number of seconds to display each frame.
+
+        Default: ``1.0``.
+    loop : bool, optional
+        If ``True``, restart animation after last image has been displayed.
+
+        Default: ``True``.
+
+    Returns
+    -------
+    gtk.MessageDialog
+        Message dialog with animation displayed in `gtk.Image` widget when
+        dialog is run.
+    '''
+    def _as_pixbuf(image):
+        if isinstance(image, types.StringTypes):
+            return gtk.gdk.pixbuf_new_from_file(image)
+        else:
+            return image
+
+    pixbufs = map(_as_pixbuf, images)
+
+    # Need this to support background thread execution with GTK.
+    gtk.gdk.threads_init()
+
+    dialog = gtk.MessageDialog(**kwargs)
+
+    # Append image to dialog content area.
+    image = gtk.Image()
+    content_area = dialog.get_content_area()
+    content_area.pack_start(image)
+    content_area.show_all()
+
+    stop_animation = threading.Event()
+
+    def _stop_animation(*args):
+        stop_animation.set()
+
+    def _animate(dialog):
+        def __animate():
+            global pixbufs
+
+            if loop:
+                pixbufs = it.cycle(pixbufs)
+
+            for pixbuf_i in pixbufs:
+                gobject.idle_add(image.set_from_pixbuf, pixbuf_i)
+                if stop_animation.wait(1.):
+                    break
+        thread = threading.Thread(target=__animate, args=(pixbufs, ))
+        thread.daemon = True
+        thread.start()
+
+    dialog.connect('destroy', _stop_animation)
+    dialog.connect('show', _animate)
+    return dialog
+
+
+def require_test_board(func):
+    '''
+    Decorator to prompt user to insert DropBot test board.
+    '''
+    @wraps(func)
+    def _wrapped(*args, **kwargs):
+        plugin_dir = ph.path(__file__).realpath().parent
+        images_dir = plugin_dir.joinpath('images', 'insert_test_board')
+        image_paths = sorted(images_dir.files('insert_test_board-*.jpg'))
+        dialog = animation_dialog(image_paths, loop=True,
+                                  buttons=gtk.BUTTONS_OK_CANCEL)
+        dialog.props.text = ('<b>Please insert the DropBot test board</b>\n\n'
+                             'For more info, see: https://goo.gl/9uHGNW')
+        dialog.props.use_markup = True
+        response = dialog.run()
+        dialog.destroy()
+
+        if response == gtk.RESPONSE_OK:
+            return func(*args, **kwargs)
+    return _wrapped
+
+
 class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     """
     This class is automatically registered with the PluginManager.
@@ -356,6 +448,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                   logger.error('Error executing DropBot self tests.',
                                exc_info=True))
     @require_connection  # Display error dialog if DropBot is not connected.
+    @require_test_board  # Prompt user to install DropBot test board
     def run_all_tests(self):
         '''
         Run all DropBot on-board self-diagnostic tests.
