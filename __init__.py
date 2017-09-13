@@ -42,6 +42,7 @@ from microdrop.plugin_manager import (IPlugin, IWaveformGenerator, Plugin,
                                       get_service_instance_by_name)
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
+from pygtkhelpers.ui.dialogs import animation_dialog
 from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
@@ -281,6 +282,30 @@ def error_ignore(on_error=None):
     return _decorator
 
 
+def require_test_board(func):
+    '''
+    Decorator to prompt user to insert DropBot test board.
+
+    .. versionchanged:: 0.16
+    '''
+    @wraps(func)
+    def _wrapped(*args, **kwargs):
+        plugin_dir = ph.path(__file__).realpath().parent
+        images_dir = plugin_dir.joinpath('images', 'insert_test_board')
+        image_paths = sorted(images_dir.files('insert_test_board-*.jpg'))
+        dialog = animation_dialog(image_paths, loop=True,
+                                  buttons=gtk.BUTTONS_OK_CANCEL)
+        dialog.props.text = ('<b>Please insert the DropBot test board</b>\n\n'
+                             'For more info, see: https://goo.gl/9uHGNW')
+        dialog.props.use_markup = True
+        response = dialog.run()
+        dialog.destroy()
+
+        if response == gtk.RESPONSE_OK:
+            return func(*args, **kwargs)
+    return _wrapped
+
+
 class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     """
     This class is automatically registered with the PluginManager.
@@ -356,6 +381,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                   logger.error('Error executing DropBot self tests.',
                                exc_info=True))
     @require_connection  # Display error dialog if DropBot is not connected.
+    @require_test_board  # Prompt user to insert DropBot test board
     def run_all_tests(self):
         '''
         Run all DropBot on-board self-diagnostic tests.
@@ -363,6 +389,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         Record test results as JSON and results summary as a Word document.
 
         .. versionadded:: 0.14
+
+        .. versionchanged:: 0.16
+            Prompt user to insert DropBot test board.
         '''
         results = db.self_test.self_test(self.control_board)
         results_dir = ph.path(self.diagnostics_results_dir)
@@ -398,6 +427,10 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
         .. versionchanged:: 0.15
             Add "Help" menu item.
+
+        .. versionchanged:: 0.16
+            Prompt user to insert DropBot test board before running channels
+            test.
         '''
         # Create head for DropBot on-board tests sub-menu.
         tests_menu_head = gtk.MenuItem('On-board self-_tests')
@@ -440,10 +473,16 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         for i, test_i in enumerate(tests):
             axis_count_i = 2 if test_i['test_name'] == 'test_channels' else 1
             menu_item_i = gtk.MenuItem(test_i['title'])
-            menu_item_i.connect('activate', lambda menu_item, test_name,
-                                axis_count: self.execute_test(test_name,
-                                                              axis_count),
-                                test_i['test_name'], axis_count_i)
+
+            def _exec_test(menu_item, test_name, axis_count):
+                self.execute_test(test_name, axis_count)
+
+            if test_i['test_name'] == 'test_channels':
+                # Test board is required for `test_channels` test.
+                _exec_test = require_test_board(_exec_test)
+
+            menu_item_i.connect('activate', _exec_test, test_i['test_name'],
+                                axis_count_i)
             menu_item_i.show()
             tests_menu.append(menu_item_i)
 
