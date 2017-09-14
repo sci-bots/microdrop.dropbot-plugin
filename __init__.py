@@ -886,6 +886,13 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                                      get_app().protocol.current_step_number)
 
     def on_experiment_log_changed(self, log):
+        '''
+        Add control board metadata to the experiment log.
+
+        .. versionchanged:: 0.16.1
+            Only attempt to run diagnostic tests if DropBot hardware is
+            connected.
+        '''
         # Check if the experiment log already has control board meta data, and
         # if so, return.
         data = log.get("control board name")
@@ -922,7 +929,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
         # run diagnostic tests
         app_values = self.get_app_values()
-        if app_values.get('Auto-run diagnostic tests'):
+        if self.status == 'connected' and app_values.get('Auto-run diagnostic '
+                                                         'tests'):
             logger.info('Running diagnostic tests')
             tests = ['system_info',
                      'test_i2c',
@@ -932,9 +940,11 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             results = {}
 
             for test in tests:
-                exec('results["%s"] = db.hardware_test.%s(self.control_board)'
-                     % (test, test))
+                test_func = getattr(db.hardware_test, test)
+                results[test] = test_func(self.control_board)
             db.hardware_test.log_results(results, self.diagnostics_results_dir)
+        else:
+            logger.info('DropBot not connected - not running diagnostic tests')
 
     def get_schedule_requests(self, function_name):
         """
