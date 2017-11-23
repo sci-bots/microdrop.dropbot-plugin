@@ -28,7 +28,7 @@ import webbrowser
 
 from dropbot import SerialProxy
 from flatland import Integer, Float, Form, Enum, Boolean
-from flatland.validation import ValueAtLeast
+from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
                                                 FigureCanvas)
 from matplotlib.figure import Figure
@@ -121,6 +121,13 @@ class DmfZmqPlugin(ZmqPlugin):
                     self.parent.channel_states =\
                         self.parent.channel_states.iloc[0:0]
                     self.parent.update_channel_states(data['channel_states'])
+            elif all([source == 'dmf_device_ui_plugin',
+                      msg_type == 'execute_request']):
+                msg = json.loads(msg_json)
+                cmd = msg['content']['command']
+                if cmd in ('measure_liquid_capacitance',
+                           'measure_filler_capacitance'):
+                    getattr(self.parent, 'on_%s' % cmd)()
             else:
                 self.most_recent = msg_json
         except zmq.Again:
@@ -337,6 +344,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.menu = None
         self.menu_item_root = None
         self.diagnostics_results_dir = '.dropbot-diagnostics'
+        self.actuated_area = 0
 
     @property
     def status(self):
@@ -502,7 +510,11 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             Float.named('default_frequency').using(default=10e3,
                                                    optional=True),
             Boolean.named('Auto-run diagnostic tests').using(default=True,
-                                                             optional=True))
+                                                             optional=True),
+            Float.named('c_liquid').using(default=0, optional=True,
+                                          properties={'show_in_gui': False}),
+            Float.named('c_filler').using(default=0, optional=True,
+                                          properties={'show_in_gui': False}))
 
     def get_step_form_class(self):
         """
@@ -522,7 +534,16 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                        .using(default=app_values['default_frequency'],
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
-                                          check_frequency]))
+                                          check_frequency]),
+                       Float.named('volume_threshold')
+                       .using(default=0,
+                              optional=True,
+                              validators=[ValueAtLeast(minimum=0),
+                                          ValueAtMost(maximum=1.0)]),
+                       Integer.named('max_repeats')
+                       .using(default=3,
+                              optional=True,
+                              validators=[ValueAtLeast(minimum=0)]))
 
     def update_channel_states(self, channel_states):
         logging.info('update_channel_states')
@@ -723,11 +744,14 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
         .. versionchanged:: 0.14
             Schedule update of control board status label in main GTK thread.
+
+        .. versionchanged:: 0.18
+            Toggle sensitivity of DropBot control board menu items based on
+            control board connection status.
         '''
         self.connection_status = "Not connected"
         app = get_app()
-        connected = self.control_board is not None
-        if connected:
+        if self.status == 'connected':
             properties = self.control_board.properties
             version = self.control_board.hardware_version
             n_channels = self.control_board.number_of_channels
@@ -739,9 +763,123 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                                        properties['software_version'], id,
                                        str(uuid)[:8], n_channels))
 
-        # Schedule update of control board status label in main GTK thread.
-        gobject.idle_add(app.main_window_controller.label_control_board_status
-                         .set_text, self.connection_status)
+        @gtk_threadsafe
+        def _update_ui_connected_status():
+            # Enable/disable control board menu items based on the connection
+            # status of the control board.
+            for menu_item_i in self.menu_items:
+                menu_item_i.set_sensitive(self.status == 'connected')
+
+            app.main_window_controller.label_control_board_status\
+                .set_text(self.connection_status)
+        _update_ui_connected_status()
+
+    def measure_capacitance(self):
+        '''
+        Measure the capacitance of all actuated electrodes on the device
+        and send an 'on_device_capacitance_update' signal to update to
+        any listeners.
+        '''
+        c = self.control_board.measure_capacitance()
+        v = self.control_board.measure_voltage()
+        results = {'capacitance': c,
+                   'voltage': v}
+        # send a signal to update the gui
+        emit_signal('on_device_capacitance_update', results)
+        return dict(capacitance=c, voltage=v)
+
+    def on_device_capacitance_update(self, results):
+        '''
+        .. versionadded:: 0.14
+            Use :func:`gtk_threadsafe` decorator to wrap GTK code, ensuring the
+            code runs in the main GTK thread.
+        '''
+        voltage = results['voltage']
+        capacitance = results['capacitance']
+
+        app = get_app()
+        app_values = self.get_app_values()
+        c_liquid = app_values['c_liquid']
+
+        @gtk_threadsafe
+        def _update_ui_impedance():
+            label = (self.connection_status + ', Voltage: %.1f V, '
+                     'Capacitance: %.1f pF' % (voltage, 1e12 * capacitance))
+
+            # add normalized force to the label if we've calibrated the device
+            if c_liquid > 0:
+                # TODO: calculate force including filler media
+                label += (u'\nForce: %.1f \u03BCN/mm (c<sub>device</sub>='
+                          u'%.1f pF/mm<sup>2</sup>)' % (
+                              1e9 * 0.5 * c_liquid * voltage**2,
+                              1e12 * c_liquid))
+            app.main_window_controller.label_control_board_status\
+                .set_markup(label)
+        _update_ui_impedance()
+
+        options = self.get_step_options()
+        logger.info('on_device_capacitance_update():')
+        logger.info('\tset_voltage=%.1f, measured_voltage=%.1f, '
+                    'error=%.1f%%', options['voltage'], voltage,
+                    100 * (voltage - options['voltage']) / options['voltage'])
+
+        # TODO: check that the voltage is within tolerance
+
+    def _calibrate_device_capacitance(self, name):
+        a = self.actuated_area
+        if self.control_board is None:
+            logger.error('DropBot is not connected.')
+        elif a == 0:
+            logger.error('At least one electrode must be actuated to perform '
+                         'calibration.')
+        else:
+            max_channels = self.control_board.number_of_channels
+            # All channels should default to off.
+            channel_states = np.zeros(max_channels, dtype=int)
+            # Set the state of any channels that have been set explicitly.
+            channel_states[self.channel_states.index
+                           .values.tolist()] = self.channel_states
+
+            # set the voltage and frequency specified for the current step
+            options = self.get_step_options()
+            emit_signal("set_frequency",
+                        options['frequency'],
+                        interface=IWaveformGenerator)
+            emit_signal("set_voltage", options['voltage'],
+                        interface=IWaveformGenerator)
+
+            # enable high voltage
+            if not self.control_board.hv_output_enabled:
+                self.control_board.hv_output_enabled = True
+
+            # perform the capacitance measurement
+            self.control_board.set_state_of_channels(channel_states)
+            c = self.control_board.measure_capacitance()
+            logger.info("on_measure_%s_capacitance: "
+                        "%.1f pF/%.1f mm^2 = %.1f pF/mm^2" % (name, c * 1e12,
+                                                              a, c / a * 1e12))
+            app_values = {}
+            app_values['c_%s' % name] = c / a
+            self.set_app_values(app_values)
+
+            v = self.control_board.measure_voltage()
+            results = {'capacitance': c,
+                       'voltage': v}
+            # send a signal to update the gui
+            emit_signal('on_device_capacitance_update', results)
+
+            # Turn off all electrodes and disable high voltage if we're
+            # not in realtime mode.
+            if not get_app().realtime_mode:
+                self.control_board.hv_output_enabled = False
+                self.control_board.set_state_of_channels(
+                    np.zeros(max_channels, dtype=int))
+
+    def on_measure_liquid_capacitance(self):
+        self._calibrate_device_capacitance('liquid')
+
+    def on_measure_filler_capacitance(self):
+        self._calibrate_device_capacitance('filler')
 
     def on_step_run(self):
         """
@@ -776,14 +914,12 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             if not self.control_board.hv_output_enabled:
                 self.control_board.hv_output_enabled = True
 
-            label = (self.connection_status + ', Voltage: %.1f V' %
-                     self.control_board.measure_voltage())
-
-            # Schedule update of control board status label in main GTK thread.
-            gobject.idle_add(app.main_window_controller
-                             .label_control_board_status.set_markup, label)
-
             self.control_board.set_state_of_channels(channel_states)
+
+            # If the app is not running, we must be in realtime mode.
+            # Measure the voltage and capacitance and update the gui.
+            if not app.running:
+                self.measure_capacitance()
 
         # if a protocol is running, wait for the specified minimum duration
         if app.running:
@@ -812,8 +948,45 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             gobject.source_remove(self.timeout_id)
 
     def _callback_step_completed(self):
-        logger.debug('[DropBotPlugin] _callback_step_completed')
-        self.step_complete()
+        results = self.measure_capacitance()
+        c = results['capacitance']
+
+        app = get_app()
+
+        app_values = self.get_app_values()
+        c_liquid = app_values['c_liquid']
+
+        step_options = self.get_step_options()
+        volume_threshold = step_options['volume_threshold']
+        max_repeats = step_options['max_repeats']
+
+        a = self.actuated_area
+        return_value = None
+        info_msg = ('_callback_step_completed: attempt=%d' %
+                    app.protocol.current_step_attempt)
+
+        # if a volume threshold has been set for this step, check if the
+        # normalized capacitance exceeds the threshold
+        if volume_threshold > 0 and a > 0 and c_liquid > 0:
+            normalized_capacitance = c / a
+            info_msg += ', C/A=%.1f pF/mm^2' % (1e12 * normalized_capacitance)
+
+            # if the measured capacitance is not above the threshold
+            if normalized_capacitance < volume_threshold * c_liquid:
+                # if we're at the max number of repeats, fail; otherwise,
+                # repeat the step
+                if app.protocol.current_step_attempt == max_repeats:
+                    return_value = 'Fail'
+                else:
+                    return_value = 'Repeat'
+
+        if return_value:
+            info_msg += '. %s' % return_value
+        else:
+            info_msg += '. OK'
+
+        logger.info(info_msg)
+        self.step_complete(return_value)
         return False  # stop the timeout from refiring
 
     def on_protocol_run(self):
@@ -855,7 +1028,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         Parameters:
             voltage : RMS voltage
         """
-        logger.info("[DropBotPlugin].set_voltage(%.1f)" % voltage)
+        logger.info("set_voltage(%.1f)" % voltage)
         self.control_board.voltage = voltage
 
     def set_frequency(self, frequency):
@@ -865,12 +1038,12 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         Parameters:
             frequency : frequency in Hz
         """
-        logger.info("[DropBotPlugin].set_frequency(%.1f)" % frequency)
+        logger.info("set_frequency(%.1f)" % frequency)
         self.control_board.frequency = frequency
         self.current_frequency = frequency
 
     def on_step_options_changed(self, plugin, step_number):
-        logger.info('[DropBotPlugin] on_step_options_changed(): %s step #%d',
+        logger.info('on_step_options_changed(): %s step #%d',
                     plugin, step_number)
         app = get_app()
         if (app.protocol and not app.running and not app.realtime_mode and
@@ -879,7 +1052,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             self.on_step_run()
 
     def on_step_swapped(self, original_step_number, new_step_number):
-        logger.info('[DropBotPlugin] on_step_swapped():'
+        logger.info('on_step_swapped():'
                     'original_step_number=%d, new_step_number=%d',
                     original_step_number, new_step_number)
         self.on_step_options_changed(self.name,
@@ -945,6 +1118,19 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             db.hardware_test.log_results(results, self.diagnostics_results_dir)
         else:
             logger.info('DropBot not connected - not running diagnostic tests')
+
+        self._use_cached_capacitance_prompt()
+
+    @gtk_threadsafe
+    def _use_cached_capacitance_prompt(self):
+        app_values = self.get_app_values()
+        if (self.control_board and (app_values['c_liquid'] > 0 or
+                                    app_values['c_filler'] > 0)):
+            response = yesno('Use cached value for c<sub>liquid</sub> '
+                             'and c<sub>filler</sub>?')
+            # reset the cached capacitance values
+            if response == gtk.RESPONSE_NO:
+                self.set_app_values(dict(c_liquid=0, c_filler=0))
 
     def get_schedule_requests(self, function_name):
         """
