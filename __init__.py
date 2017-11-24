@@ -32,6 +32,7 @@ from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
                                                 FigureCanvas)
 from matplotlib.figure import Figure
+from matplotlib import mlab
 from microdrop.app_context import get_app, get_hub_uri
 from microdrop.gui.protocol_grid_controller import ProtocolGridController
 from microdrop.plugin_helpers import (StepOptionsController, AppDataController)
@@ -673,6 +674,13 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         else:
             raise Exception("No serial ports available.")
 
+    def data_dir(self):
+        app = get_app()
+        data_dir = app.experiment_log.get_log_path().joinpath(self.name)
+        if not data_dir.isdir():
+            data_dir.makedirs_p()
+        return data_dir
+
     def check_device_name_and_version(self):
         """
         Check to see if:
@@ -794,6 +802,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             Use :func:`gtk_threadsafe` decorator to wrap GTK code, ensuring the
             code runs in the main GTK thread.
         '''
+        area = self.actuated_area
         voltage = results['voltage']
         capacitance = results['capacitance']
 
@@ -824,6 +833,25 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     100 * (voltage - options['voltage']) / options['voltage'])
 
         # TODO: check that the voltage is within tolerance
+
+        # Append data to CSV file.
+        csv_output_path = self.data_dir().joinpath('data.csv')
+        # Only include header if the file does not exist or is empty.
+        include_header = not (csv_output_path.isfile() and
+                              (csv_output_path.size > 0))
+
+        df = pd.DataFrame(dict(
+            utc_timestamp=[dt.datetime.utcnow()],
+            area=[area],
+            step=[app.protocol.current_step_number + 1],
+            attempt=[app.protocol.current_step_attempt],
+            voltage=[voltage],
+            capacitance=[capacitance],
+            channels=[mlab.find(self.control_board.state_of_channels).tolist()]))
+
+        with csv_output_path.open('a') as output:
+            df.to_csv(output, index=False,
+                      header=include_header)
 
     def _calibrate_device_capacitance(self, name):
         a = self.actuated_area
