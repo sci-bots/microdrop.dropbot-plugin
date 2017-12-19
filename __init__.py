@@ -512,8 +512,10 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                                                    optional=True),
             Boolean.named('Auto-run diagnostic tests').using(default=True,
                                                              optional=True),
+            # .. versionadded: 0.18
             Float.named('c_liquid').using(default=0, optional=True,
                                           properties={'show_in_gui': False}),
+            # .. versionadded: 0.18
             Float.named('c_filler').using(default=0, optional=True,
                                           properties={'show_in_gui': False}))
 
@@ -536,11 +538,13 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           check_frequency]),
+                       # .. versionadded: 0.18
                        Float.named('volume_threshold')
                        .using(default=0,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           ValueAtMost(maximum=1.0)]),
+                       # .. versionadded: 0.18
                        Integer.named('max_repeats')
                        .using(default=3,
                               optional=True,
@@ -675,6 +679,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             raise Exception("No serial ports available.")
 
     def data_dir(self):
+        '''
+        .. versionadded: 0.18
+        '''
         app = get_app()
         data_dir = app.experiment_log.get_log_path().joinpath(self.name)
         if not data_dir.isdir():
@@ -787,6 +794,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         Measure the capacitance of all actuated electrodes on the device
         and send an 'on_device_capacitance_update' signal to update to
         any listeners.
+
+        .. versionadded: 0.18
         '''
         c = self.control_board.measure_capacitance()
         v = self.control_board.measure_voltage()
@@ -798,9 +807,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
     def on_device_capacitance_update(self, results):
         '''
-        .. versionadded:: 0.14
-            Use :func:`gtk_threadsafe` decorator to wrap GTK code, ensuring the
-            code runs in the main GTK thread.
+        .. versionadded: 0.18
         '''
         area = self.actuated_area
         voltage = results['voltage']
@@ -854,6 +861,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                       header=include_header)
 
     def _calibrate_device_capacitance(self, name):
+        '''
+        .. versionadded: 0.18
+        '''
         a = self.actuated_area
         if self.control_board is None:
             logger.error('DropBot is not connected.')
@@ -904,9 +914,15 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                     np.zeros(max_channels, dtype=int))
 
     def on_measure_liquid_capacitance(self):
+        '''
+        .. versionadded: 0.18
+        '''
         self._calibrate_device_capacitance('liquid')
 
     def on_measure_filler_capacitance(self):
+        '''
+        .. versionadded: 0.18
+        '''
         self._calibrate_device_capacitance('filler')
 
     def on_step_run(self):
@@ -920,6 +936,13 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
         .. versionchanged:: 0.14
             Schedule update of control board status label in main GTK thread.
+
+        .. versionchanged:: 0.18
+            Do not update control board status label.
+
+            Instead, status is updated when capacitance is measured a) after
+            actuation in real-time mode, or b) after step duration is complete
+            when protocol is running.
         """
         logger.debug('[DropBotPlugin] on_step_run()')
         self._kill_running_step()
@@ -1151,6 +1174,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
     @gtk_threadsafe
     def _use_cached_capacitance_prompt(self):
+        '''
+        .. versionadded: 0.18
+        '''
         app_values = self.get_app_values()
         if (self.control_board and (app_values['c_liquid'] > 0 or
                                     app_values['c_filler'] > 0)):
