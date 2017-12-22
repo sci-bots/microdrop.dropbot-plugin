@@ -380,16 +380,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.connect('dropbot-disconnected', _on_dropbot_disconnected)
 
     @property
-    def status(self):
-        '''
-        .. versionadded:: 0.14
-        '''
-        if self.control_board is None:
-            return 'disconnected'
-        else:
-            return 'connected'
-
-    @property
     def dropbot_connected(self):
         '''
         Event set when DropBot is connected (and cleared when DropBot is
