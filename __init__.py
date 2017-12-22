@@ -17,11 +17,13 @@ You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
 from functools import wraps
+import Queue
 import datetime as dt
 import json
 import logging
 import pkg_resources
 import re
+import threading
 import types
 import warnings
 import webbrowser
@@ -44,6 +46,7 @@ from microdrop.plugin_manager import (IPlugin, IWaveformGenerator, Plugin,
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
+from pygtkhelpers.utils import gsignal
 from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
@@ -65,8 +68,10 @@ import tables
 import zmq
 
 from ._version import get_versions
+from .noconflict import classmaker
 __version__ = get_versions()['version']
 del get_versions
+from .noconflict import classmaker
 
 # Prevent warning about potential future changes to Numpy scalar encoding
 # behaviour.
@@ -253,7 +258,7 @@ def require_connection(func):
     '''
     @wraps(func)
     def _wrapped(self, *args, **kwargs):
-        if self.status != 'connected':
+        if not self.dropbot_connected.is_set():
             logger.error('DropBot is not connected.')
         else:
             return func(self, *args, **kwargs)
@@ -314,10 +319,31 @@ def require_test_board(func):
     return _wrapped
 
 
-class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
+
+class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
+                    AppDataController):
     """
     This class is automatically registered with the PluginManager.
+
+    .. versionchanged:: 0.19
+        Inherit from ``gobject.GObject`` base class to add support for
+        ``gsignal`` signals.
+
+        Add ``gsignal`` signals for DropBot connection status and DMF chip
+        status.
     """
+    # Without the follow line, cannot inherit from both `Plugin` and
+    # `gobject.GObject`.  See [here][1] for more details.
+    #
+    # [1]: http://code.activestate.com/recipes/204197-solving-the-metaclass-conflict/
+    __metaclass__ = classmaker()
+
+    # ..versionadded:: 0.19
+    gsignal('dropbot-connected', object)
+    gsignal('dropbot-disconnected')
+    gsignal('chip-inserted')
+    gsignal('chip-removed')
+
     implements(IPlugin)
     implements(IWaveformGenerator)
 
@@ -333,6 +359,19 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         return self.get_step_form_class()
 
     def __init__(self):
+        '''
+        .. versionchanged:: 0.19
+            Add ``gsignal`` signals for DropBot connection status and DMF chip
+            status.
+
+            Set ``threading.Event`` when DropBot connection is established.
+
+            Set ``threading.Event`` when DMF chip is inserted.
+        '''
+        # Explicitly initialize GObject base class since it is not the first
+        # base class listed.
+        gobject.GObject.__init__(self)
+
         self.control_board = None
         self.name = self.plugin_name
         self.connection_status = "Not connected"
@@ -347,15 +386,55 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.diagnostics_results_dir = '.dropbot-diagnostics'
         self.actuated_area = 0
 
+        self.chip_watch_thread = None
+        self._chip_inserted = threading.Event()
+        self._dropbot_connected = threading.Event()
+
+        self.connect('chip-inserted', lambda *args:
+                     self.chip_inserted.set())
+        self.connect('chip-inserted', lambda *args:
+                     self.update_connection_status())
+        self.connect('chip-removed', lambda *args:
+                     self.chip_inserted.clear())
+        self.connect('chip-removed', lambda *args:
+                     self.update_connection_status())
+
+        def _on_dropbot_connected(*args):
+            self.dropbot_connected.set()
+            OUTPUT_ENABLE_PIN = 22
+            # Check if chip is inserted by reading active low OUTPUT_ENABLE_PIN.
+            if self.control_board.digital_read(OUTPUT_ENABLE_PIN):
+                self.emit('chip-removed')
+            else:
+                self.emit('chip-inserted')
+
+        self.connect('dropbot-connected', _on_dropbot_connected)
+
+        def _on_dropbot_disconnected(*args):
+            self.dropbot_connected.clear()
+            self.emit('chip-removed')
+
+        self.connect('dropbot-disconnected', _on_dropbot_disconnected)
+
     @property
-    def status(self):
+    def chip_inserted(self):
         '''
-        .. versionadded:: 0.14
+        Event set when a DMF chip is inserted into DropBot (and cleared when
+        DMF chip is removed).
+
+        .. versionadded:: 0.19
         '''
-        if self.control_board is None:
-            return 'disconnected'
-        else:
-            return 'connected'
+        return self._chip_inserted
+
+    @property
+    def dropbot_connected(self):
+        '''
+        Event set when DropBot is connected (and cleared when DropBot is
+        disconnected).
+
+        .. versionadded:: 0.19
+        '''
+        return self._dropbot_connected
 
     @gtk_threadsafe  # Execute in GTK main thread
     @error_ignore(lambda exception, func, self, test_name, *args:
@@ -572,10 +651,17 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         if self.plugin is not None:
             self.plugin = None
         if self.control_board is not None:
+            self.control_board.hv_output_enabled = False
             self.control_board.terminate()
             self.control_board = None
+            gobject.idle_add(self.emit, 'dropbot-disconnected')
 
     def on_plugin_enable(self):
+        '''
+        .. versionchanged:: 0.19
+            Launch background thread to monitor for DMF chip status events from
+            DropBot serial stream.
+        '''
         super(DropBotPlugin, self).on_plugin_enable()
         if not self.menu_items:
             # Schedule initialization of menu user interface.  Calling
@@ -598,6 +684,39 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             self.on_step_run()
             self._update_protocol_grid()
 
+        def _watch_for_chip():
+            '''
+            Watch for DropBot device notification for DMF chip
+            insertion/removal.
+
+            Translate incoming events to g-signal events so GUI code may
+            respond to events where necessary.
+            '''
+            # Wait for DropBot to connect.
+            while self.dropbot_connected.wait():
+                # DropBot is connected, so check for incoming events on stream
+                # queue.
+                try:
+                    timestamp, packet = (self.control_board.queues.stream
+                                         .get(block=True, timeout=.1))
+                    message = json.loads(packet.data())
+
+                    event = message.get('event')
+                    if event == 'output_enabled':
+                        gobject.idle_add(self.emit, 'chip-inserted')
+                    elif event == 'output_disabled':
+                        gobject.idle_add(self.emit, 'chip-removed')
+                except Queue.Empty:
+                    pass
+                except ValueError:
+                    pass
+
+        if self.chip_watch_thread is None:
+            self.chip_watch_thread = threading.Thread(target=_watch_for_chip)
+            # Stop when main thread exits.
+            self.chip_watch_thread.daemon = True
+            self.chip_watch_thread.start()
+
     def on_plugin_disable(self):
         self.cleanup_plugin()
         if get_app().protocol:
@@ -607,12 +726,19 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     def on_app_exit(self):
         """
         Handler called just before the Microdrop application exits.
+
+        .. versionchanged:: 0.19
+            Emit ``dropbot-disconnected`` ``gsignal`` after closing DropBot
+            connection.
         """
         self.cleanup_plugin()
         try:
+            # TODO Is this required?  This code is already run in
+            # `cleanup_plugin()`.
             self.control_board.hv_output_enabled = False
             self.control_board.terminate()
             self.control_board = None
+            gobject.idle_add(self.emit, 'dropbot-disconnected')
         except Exception:
             # ignore any exceptions (e.g., if the board is not connected)
             pass
@@ -637,7 +763,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                         reconnect = True
 
             if reconnect:
-                self.connect()
+                self.connect_dropbot()
 
             self._update_protocol_grid()
         elif plugin_name == app.name:
@@ -648,17 +774,28 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 logger.info('Turning off all electrodes.')
                 self.control_board.hv_output_enabled = False
 
-    def connect(self):
+    def connect_dropbot(self):
         """
         Try to connect to the control board at the default serial port selected
         in the Microdrop application options.
 
         If unsuccessful, try to connect to the control board on any available
         serial port, one-by-one.
+
+        .. versionchanged:: 0.19
+            Rename method to ``connect_dropbot`` to avoid a name collision with
+            the ``gobject.GObject.connect`` method.
+
+            Emit ``dropbot-connected`` ``gsignal`` after establishing DropBot
+            connection.
+
+            Emit ``dropbot-disconnected`` ``gsignal`` after closing DropBot
+            connection.
         """
         if self.control_board:
             self.control_board.terminate()
             self.control_board = None
+            gobject.idle_add(self.emit, 'dropbot-disconnected')
         self.current_frequency = None
         serial_ports = list(get_serial_ports())
         if serial_ports:
@@ -675,6 +812,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             self.control_board.initialize_switching_boards()
             app_values['serial_port'] = self.control_board.port
             self.set_app_values(app_values)
+            gobject.idle_add(self.emit, 'dropbot-connected',
+                             self.control_board)
         else:
             raise Exception("No serial ports available.")
 
@@ -700,7 +839,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         matches the host driver API version.
         """
         try:
-            self.connect()
+            self.connect_dropbot()
             name = self.control_board.properties['package_name']
             if name != self.control_board.host_package_name:
                 raise Exception("Device is not a DropBot")
@@ -738,14 +877,12 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         except Exception, why:
             logger.warning("%s" % why)
 
-        self.update_connection_status()
-
     def on_flash_firmware(self, widget=None, data=None):
         app = get_app()
         try:
             connected = self.control_board is not None
             if not connected:
-                self.connect()
+                self.connect_dropbot()
             self.control_board.flash_firmware()
             app.main_window_controller.info("Firmware updated successfully.",
                                             "Firmware update")
@@ -763,27 +900,36 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         .. versionchanged:: 0.18
             Toggle sensitivity of DropBot control board menu items based on
             control board connection status.
+
+        .. versionchanged:: 0.19
+            Always keep ``Help`` menu item sensitive, regardless of DropBot
+            connection status.
+
+            Indicate if chip is inserted in UI status label.
         '''
         self.connection_status = "Not connected"
         app = get_app()
-        if self.status == 'connected':
+        if self.dropbot_connected.is_set():
             properties = self.control_board.properties
             version = self.control_board.hardware_version
             n_channels = self.control_board.number_of_channels
             id = self.control_board.id
             uuid = self.control_board.uuid
             self.connection_status = ('%s v%s (Firmware: %s, id: %s, uuid: '
-                                      '%s)\n' '%d channels' %
+                                      '%s)\n' '%d channels%s' %
                                       (properties['display_name'], version,
                                        properties['software_version'], id,
-                                       str(uuid)[:8], n_channels))
+                                       str(uuid)[:8], n_channels,
+                                       '' if not self.chip_inserted.is_set()
+                                       else ' [chip inserted]'))
 
         @gtk_threadsafe
         def _update_ui_connected_status():
             # Enable/disable control board menu items based on the connection
             # status of the control board.
             for menu_item_i in self.menu_items:
-                menu_item_i.set_sensitive(self.status == 'connected')
+                if 'Help' not in menu_item_i.props.label:
+                    menu_item_i.set_sensitive(self.dropbot_connected.is_set())
 
             app.main_window_controller.label_control_board_status\
                 .set_text(self.connection_status)
@@ -808,6 +954,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
     def on_device_capacitance_update(self, results):
         '''
         .. versionadded: 0.18
+
+        .. versionchanged: 0.19
+            Simplify control board status label update.
         '''
         area = self.actuated_area
         voltage = results['voltage']
@@ -817,21 +966,20 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         app_values = self.get_app_values()
         c_liquid = app_values['c_liquid']
 
-        @gtk_threadsafe
-        def _update_ui_impedance():
-            label = (self.connection_status + ', Voltage: %.1f V, '
-                     'Capacitance: %.1f pF' % (voltage, 1e12 * capacitance))
+        label = 'Voltage: %.1f V, Capacitance: %.1f pF' % (voltage, 1e12 *
+                                                           capacitance)
 
-            # add normalized force to the label if we've calibrated the device
-            if c_liquid > 0:
-                # TODO: calculate force including filler media
-                label += (u'\nForce: %.1f \u03BCN/mm (c<sub>device</sub>='
-                          u'%.1f pF/mm<sup>2</sup>)' % (
-                              1e9 * 0.5 * c_liquid * voltage**2,
-                              1e12 * c_liquid))
-            app.main_window_controller.label_control_board_status\
-                .set_markup(label)
-        _update_ui_impedance()
+        # add normalized force to the label if we've calibrated the device
+        if c_liquid > 0:
+            # TODO: calculate force including filler media
+            label += (u'\nForce: %.1f \u03BCN/mm (c<sub>device</sub>='
+                      u'%.1f pF/mm<sup>2</sup>)' % (1e9 * 0.5 * c_liquid *
+                                                    voltage**2, 1e12 *
+                                                    c_liquid))
+
+        # Schedule update of control board status label in main GTK thread.
+        gobject.idle_add(app.main_window_controller.label_control_board_status
+                         .set_text, ', '.join([self.connection_status, label]))
 
         options = self.get_step_options()
         logger.info('on_device_capacitance_update():')
@@ -1153,8 +1301,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
         # run diagnostic tests
         app_values = self.get_app_values()
-        if self.status == 'connected' and app_values.get('Auto-run diagnostic '
-                                                         'tests'):
+        if self.dropbot_connected.is_set() and app_values.get('Auto-run '
+                                                              'diagnostic '
+                                                              'tests'):
             logger.info('Running diagnostic tests')
             tests = ['system_info',
                      'test_i2c',
