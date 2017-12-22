@@ -257,7 +257,7 @@ def require_connection(func):
     '''
     @wraps(func)
     def _wrapped(self, *args, **kwargs):
-        if self.status != 'connected':
+        if not self.dropbot_connected.is_set():
             logger.error('DropBot is not connected.')
         else:
             return func(self, *args, **kwargs)
@@ -812,7 +812,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         self.connection_status = "Not connected"
         app = get_app()
-        if self.status == 'connected':
+        if self.dropbot_connected.is_set():
             properties = self.control_board.properties
             version = self.control_board.hardware_version
             n_channels = self.control_board.number_of_channels
@@ -829,7 +829,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # Enable/disable control board menu items based on the connection
             # status of the control board.
             for menu_item_i in self.menu_items:
-                menu_item_i.set_sensitive(self.status == 'connected')
+                menu_item_i.set_sensitive(self.dropbot_connected.is_set())
 
             app.main_window_controller.label_control_board_status\
                 .set_text(self.connection_status)
