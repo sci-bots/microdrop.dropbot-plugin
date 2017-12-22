@@ -22,6 +22,7 @@ import json
 import logging
 import pkg_resources
 import re
+import threading
 import types
 import warnings
 import webbrowser
@@ -44,6 +45,7 @@ from microdrop.plugin_manager import (IPlugin, IWaveformGenerator, Plugin,
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
+from pygtkhelpers.utils import gsignal
 from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
@@ -68,6 +70,7 @@ from ._version import get_versions
 from .noconflict import classmaker
 __version__ = get_versions()['version']
 del get_versions
+from .noconflict import classmaker
 
 # Prevent warning about potential future changes to Numpy scalar encoding
 # behaviour.
@@ -315,10 +318,21 @@ def require_test_board(func):
     return _wrapped
 
 
-class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
+
+class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
+                    AppDataController):
     """
     This class is automatically registered with the PluginManager.
     """
+    # Without the follow line, cannot inherit from both `Plugin` and
+    # `gobject.GObject`.  See [here][1] for more details.
+    #
+    # [1]: http://code.activestate.com/recipes/204197-solving-the-metaclass-conflict/
+    __metaclass__ = classmaker()
+
+    gsignal('dropbot-connected', object)
+    gsignal('dropbot-disconnected')
+
     implements(IPlugin)
     implements(IWaveformGenerator)
 
@@ -334,6 +348,10 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         return self.get_step_form_class()
 
     def __init__(self):
+        # Explicitly initialize GObject base class since it is not the first
+        # base class listed.
+        gobject.GObject.__init__(self)
+
         self.control_board = None
         self.name = self.plugin_name
         self.connection_status = "Not connected"
@@ -347,6 +365,19 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         self.menu_item_root = None
         self.diagnostics_results_dir = '.dropbot-diagnostics'
         self.actuated_area = 0
+        self._dropbot_connected = threading.Event()
+
+        def _on_dropbot_connected(*args):
+            self.dropbot_connected.set()
+            self.update_connection_status()
+
+        self.connect('dropbot-connected', _on_dropbot_connected)
+
+        def _on_dropbot_disconnected(*args):
+            self.dropbot_connected.clear()
+            self.update_connection_status()
+
+        self.connect('dropbot-disconnected', _on_dropbot_disconnected)
 
     @property
     def status(self):
@@ -357,6 +388,14 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             return 'disconnected'
         else:
             return 'connected'
+
+    @property
+    def dropbot_connected(self):
+        '''
+        Event set when DropBot is connected (and cleared when DropBot is
+        disconnected).
+        '''
+        return self._dropbot_connected
 
     @gtk_threadsafe  # Execute in GTK main thread
     @error_ignore(lambda exception, func, self, test_name, *args:
@@ -576,6 +615,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             self.control_board.hv_output_enabled = False
             self.control_board.terminate()
             self.control_board = None
+            gobject.idle_add(self.emit, 'dropbot-disconnected')
 
     def on_plugin_enable(self):
         super(DropBotPlugin, self).on_plugin_enable()
@@ -612,9 +652,12 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         """
         self.cleanup_plugin()
         try:
+            # TODO Is this required?  This code is already run in
+            # `cleanup_plugin()`.
             self.control_board.hv_output_enabled = False
             self.control_board.terminate()
             self.control_board = None
+            gobject.idle_add(self.emit, 'dropbot-disconnected')
         except Exception:
             # ignore any exceptions (e.g., if the board is not connected)
             pass
@@ -639,7 +682,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                         reconnect = True
 
             if reconnect:
-                self.connect()
+                self.connect_dropbot()
 
             self._update_protocol_grid()
         elif plugin_name == app.name:
@@ -650,7 +693,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
                 logger.info('Turning off all electrodes.')
                 self.control_board.hv_output_enabled = False
 
-    def connect(self):
+    def connect_dropbot(self):
         """
         Try to connect to the control board at the default serial port selected
         in the Microdrop application options.
@@ -661,6 +704,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         if self.control_board:
             self.control_board.terminate()
             self.control_board = None
+            gobject.idle_add(self.emit, 'dropbot-disconnected')
         self.current_frequency = None
         serial_ports = list(get_serial_ports())
         if serial_ports:
@@ -677,6 +721,8 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
             self.control_board.initialize_switching_boards()
             app_values['serial_port'] = self.control_board.port
             self.set_app_values(app_values)
+            gobject.idle_add(self.emit, 'dropbot-connected',
+                             self.control_board)
         else:
             raise Exception("No serial ports available.")
 
@@ -702,7 +748,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         matches the host driver API version.
         """
         try:
-            self.connect()
+            self.connect_dropbot()
             name = self.control_board.properties['package_name']
             if name != self.control_board.host_package_name:
                 raise Exception("Device is not a DropBot")
@@ -740,14 +786,12 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         except Exception, why:
             logger.warning("%s" % why)
 
-        self.update_connection_status()
-
     def on_flash_firmware(self, widget=None, data=None):
         app = get_app()
         try:
             connected = self.control_board is not None
             if not connected:
-                self.connect()
+                self.connect_dropbot()
             self.control_board.flash_firmware()
             app.main_window_controller.info("Firmware updated successfully.",
                                             "Firmware update")
@@ -1154,8 +1198,9 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
 
         # run diagnostic tests
         app_values = self.get_app_values()
-        if self.status == 'connected' and app_values.get('Auto-run diagnostic '
-                                                         'tests'):
+        if self.dropbot_connected.is_set() and app_values.get('Auto-run '
+                                                              'diagnostic '
+                                                              'tests'):
             logger.info('Running diagnostic tests')
             tests = ['system_info',
                      'test_i2c',
