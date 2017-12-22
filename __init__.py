@@ -65,6 +65,7 @@ import tables
 import zmq
 
 from ._version import get_versions
+from .noconflict import classmaker
 __version__ = get_versions()['version']
 del get_versions
 
