@@ -818,21 +818,20 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         app_values = self.get_app_values()
         c_liquid = app_values['c_liquid']
 
-        @gtk_threadsafe
-        def _update_ui_impedance():
-            label = (self.connection_status + ', Voltage: %.1f V, '
-                     'Capacitance: %.1f pF' % (voltage, 1e12 * capacitance))
+        label = 'Voltage: %.1f V, Capacitance: %.1f pF' % (voltage, 1e12 *
+                                                           capacitance)
 
-            # add normalized force to the label if we've calibrated the device
-            if c_liquid > 0:
-                # TODO: calculate force including filler media
-                label += (u'\nForce: %.1f \u03BCN/mm (c<sub>device</sub>='
-                          u'%.1f pF/mm<sup>2</sup>)' % (
-                              1e9 * 0.5 * c_liquid * voltage**2,
-                              1e12 * c_liquid))
-            app.main_window_controller.label_control_board_status\
-                .set_markup(label)
-        _update_ui_impedance()
+        # add normalized force to the label if we've calibrated the device
+        if c_liquid > 0:
+            # TODO: calculate force including filler media
+            label += (u'\nForce: %.1f \u03BCN/mm (c<sub>device</sub>='
+                      u'%.1f pF/mm<sup>2</sup>)' % (1e9 * 0.5 * c_liquid *
+                                                    voltage**2, 1e12 *
+                                                    c_liquid))
+
+        # Schedule update of control board status label in main GTK thread.
+        gobject.idle_add(app.main_window_controller.label_control_board_status
+                         .set_text, ', '.join([self.connection_status, label]))
 
         options = self.get_step_options()
         logger.info('on_device_capacitance_update():')
