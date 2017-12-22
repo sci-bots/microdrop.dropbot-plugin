@@ -324,6 +324,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     AppDataController):
     """
     This class is automatically registered with the PluginManager.
+
+    .. versionchanged:: 0.19
+        Inherit from ``gobject.GObject`` base class to add support for
+        ``gsignal`` signals.
+
+        Add ``gsignal`` signals for DropBot connection status and DMF chip
+        status.
     """
     # Without the follow line, cannot inherit from both `Plugin` and
     # `gobject.GObject`.  See [here][1] for more details.
@@ -331,6 +338,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     # [1]: http://code.activestate.com/recipes/204197-solving-the-metaclass-conflict/
     __metaclass__ = classmaker()
 
+    # ..versionadded:: 0.19
     gsignal('dropbot-connected', object)
     gsignal('dropbot-disconnected')
     gsignal('chip-inserted')
@@ -351,6 +359,15 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         return self.get_step_form_class()
 
     def __init__(self):
+        '''
+        .. versionchanged:: 0.19
+            Add ``gsignal`` signals for DropBot connection status and DMF chip
+            status.
+
+            Set ``threading.Event`` when DropBot connection is established.
+
+            Set ``threading.Event`` when DMF chip is inserted.
+        '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
         gobject.GObject.__init__(self)
@@ -368,6 +385,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.menu_item_root = None
         self.diagnostics_results_dir = '.dropbot-diagnostics'
         self.actuated_area = 0
+
         self.chip_watch_thread = None
         self._chip_inserted = threading.Event()
         self._dropbot_connected = threading.Event()
@@ -403,6 +421,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         Event set when a DMF chip is inserted into DropBot (and cleared when
         DMF chip is removed).
+
+        .. versionadded:: 0.19
         '''
         return self._chip_inserted
 
@@ -411,6 +431,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         Event set when DropBot is connected (and cleared when DropBot is
         disconnected).
+
+        .. versionadded:: 0.19
         '''
         return self._dropbot_connected
 
@@ -635,6 +657,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             gobject.idle_add(self.emit, 'dropbot-disconnected')
 
     def on_plugin_enable(self):
+        '''
+        .. versionchanged:: 0.19
+            Launch background thread to monitor for DMF chip status events from
+            DropBot serial stream.
+        '''
         super(DropBotPlugin, self).on_plugin_enable()
         if not self.menu_items:
             # Schedule initialization of menu user interface.  Calling
@@ -699,6 +726,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     def on_app_exit(self):
         """
         Handler called just before the Microdrop application exits.
+
+        .. versionchanged:: 0.19
+            Emit ``dropbot-disconnected`` ``gsignal`` after closing DropBot
+            connection.
         """
         self.cleanup_plugin()
         try:
@@ -750,6 +781,16 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         If unsuccessful, try to connect to the control board on any available
         serial port, one-by-one.
+
+        .. versionchanged:: 0.19
+            Rename method to ``connect_dropbot`` to avoid a name collision with
+            the ``gobject.GObject.connect`` method.
+
+            Emit ``dropbot-connected`` ``gsignal`` after establishing DropBot
+            connection.
+
+            Emit ``dropbot-disconnected`` ``gsignal`` after closing DropBot
+            connection.
         """
         if self.control_board:
             self.control_board.terminate()
@@ -859,6 +900,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 0.18
             Toggle sensitivity of DropBot control board menu items based on
             control board connection status.
+
+        .. versionchanged:: 0.19
+            Always keep ``Help`` menu item sensitive, regardless of DropBot
+            connection status.
+
+            Indicate if chip is inserted in UI status label.
         '''
         self.connection_status = "Not connected"
         app = get_app()
@@ -907,6 +954,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     def on_device_capacitance_update(self, results):
         '''
         .. versionadded: 0.18
+
+        .. versionchanged: 0.19
+            Simplify control board status label update.
         '''
         area = self.actuated_area
         voltage = results['voltage']
