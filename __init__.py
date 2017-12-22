@@ -17,6 +17,7 @@ You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
 from functools import wraps
+import Queue
 import datetime as dt
 import json
 import logging
@@ -332,6 +333,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     gsignal('dropbot-connected', object)
     gsignal('dropbot-disconnected')
+    gsignal('chip-inserted')
+    gsignal('chip-removed')
 
     implements(IPlugin)
     implements(IWaveformGenerator)
@@ -365,19 +368,43 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.menu_item_root = None
         self.diagnostics_results_dir = '.dropbot-diagnostics'
         self.actuated_area = 0
+        self.chip_watch_thread = None
+        self._chip_inserted = threading.Event()
         self._dropbot_connected = threading.Event()
+
+        self.connect('chip-inserted', lambda *args:
+                     self.chip_inserted.set())
+        self.connect('chip-inserted', lambda *args:
+                     self.update_connection_status())
+        self.connect('chip-removed', lambda *args:
+                     self.chip_inserted.clear())
+        self.connect('chip-removed', lambda *args:
+                     self.update_connection_status())
 
         def _on_dropbot_connected(*args):
             self.dropbot_connected.set()
-            self.update_connection_status()
+            OUTPUT_ENABLE_PIN = 22
+            # Check if chip is inserted by reading active low OUTPUT_ENABLE_PIN.
+            if self.control_board.digital_read(OUTPUT_ENABLE_PIN):
+                self.emit('chip-removed')
+            else:
+                self.emit('chip-inserted')
 
         self.connect('dropbot-connected', _on_dropbot_connected)
 
         def _on_dropbot_disconnected(*args):
             self.dropbot_connected.clear()
-            self.update_connection_status()
+            self.emit('chip-removed')
 
         self.connect('dropbot-disconnected', _on_dropbot_disconnected)
+
+    @property
+    def chip_inserted(self):
+        '''
+        Event set when a DMF chip is inserted into DropBot (and cleared when
+        DMF chip is removed).
+        '''
+        return self._chip_inserted
 
     @property
     def dropbot_connected(self):
@@ -630,6 +657,39 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.on_step_run()
             self._update_protocol_grid()
 
+        def _watch_for_chip():
+            '''
+            Watch for DropBot device notification for DMF chip
+            insertion/removal.
+
+            Translate incoming events to g-signal events so GUI code may
+            respond to events where necessary.
+            '''
+            # Wait for DropBot to connect.
+            while self.dropbot_connected.wait():
+                # DropBot is connected, so check for incoming events on stream
+                # queue.
+                try:
+                    timestamp, packet = (self.control_board.queues.stream
+                                         .get(block=True, timeout=.1))
+                    message = json.loads(packet.data())
+
+                    event = message.get('event')
+                    if event == 'output_enabled':
+                        gobject.idle_add(self.emit, 'chip-inserted')
+                    elif event == 'output_disabled':
+                        gobject.idle_add(self.emit, 'chip-removed')
+                except Queue.Empty:
+                    pass
+                except ValueError:
+                    pass
+
+        if self.chip_watch_thread is None:
+            self.chip_watch_thread = threading.Thread(target=_watch_for_chip)
+            # Stop when main thread exits.
+            self.chip_watch_thread.daemon = True
+            self.chip_watch_thread.start()
+
     def on_plugin_disable(self):
         self.cleanup_plugin()
         if get_app().protocol:
@@ -809,10 +869,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             id = self.control_board.id
             uuid = self.control_board.uuid
             self.connection_status = ('%s v%s (Firmware: %s, id: %s, uuid: '
-                                      '%s)\n' '%d channels' %
+                                      '%s)\n' '%d channels%s' %
                                       (properties['display_name'], version,
                                        properties['software_version'], id,
-                                       str(uuid)[:8], n_channels))
+                                       str(uuid)[:8], n_channels,
+                                       '' if not self.chip_inserted.is_set()
+                                       else ' [chip inserted]'))
 
         @gtk_threadsafe
         def _update_ui_connected_status():
