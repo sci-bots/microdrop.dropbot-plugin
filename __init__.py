@@ -819,7 +819,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # Enable/disable control board menu items based on the connection
             # status of the control board.
             for menu_item_i in self.menu_items:
-                menu_item_i.set_sensitive(self.dropbot_connected.is_set())
+                if 'Help' not in menu_item_i.props.label:
+                    menu_item_i.set_sensitive(self.dropbot_connected.is_set())
 
             app.main_window_controller.label_control_board_status\
                 .set_text(self.connection_status)
