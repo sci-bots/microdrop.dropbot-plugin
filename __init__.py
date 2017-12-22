@@ -573,6 +573,7 @@ class DropBotPlugin(Plugin, StepOptionsController, AppDataController):
         if self.plugin is not None:
             self.plugin = None
         if self.control_board is not None:
+            self.control_board.hv_output_enabled = False
             self.control_board.terminate()
             self.control_board = None
 
