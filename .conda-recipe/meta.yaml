@@ -18,8 +18,8 @@ build:
 requirements:
   build:
     - conda-helpers >=0.4
-    # .. versionchanged:: 0.19
-    - dropbot >=1.37
+    # .. versionchanged:: 0.20
+    - dropbot >=1.37.2
     - flatland-fork
     - json-tricks >=3.8.0
     - microdrop >=2.0
@@ -37,8 +37,8 @@ requirements:
 
   run:
     - conda-helpers >=0.4
-    # .. versionchanged:: 0.19
-    - dropbot >=1.37
+    # .. versionchanged:: 0.20
+    - dropbot >=1.37.2
     - flatland-fork
     - json-tricks >=3.8.0
     - microdrop >=2.0
