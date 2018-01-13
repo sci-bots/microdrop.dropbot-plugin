@@ -34,7 +34,6 @@ from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
                                                 FigureCanvas)
 from matplotlib.figure import Figure
-from matplotlib import mlab
 from microdrop.app_context import get_app, get_hub_uri
 from microdrop.gui.protocol_grid_controller import ProtocolGridController
 from microdrop.plugin_helpers import (StepOptionsController, AppDataController)
@@ -1002,7 +1001,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             attempt=[app.protocol.current_step_attempt],
             voltage=[voltage],
             capacitance=[capacitance],
-            channels=[mlab.find(self.control_board.state_of_channels).tolist()]))
+            channels=[np.where(self.control_board
+                               .state_of_channels)[0].tolist()]))
 
         with csv_output_path.open('a') as output:
             df.to_csv(output, index=False,
