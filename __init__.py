@@ -787,6 +787,17 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
             Emit ``dropbot-disconnected`` ``gsignal`` after closing DropBot
             connection.
+        .. versionchanged:: 0.22
+            Use new :mod:`base_node_rpc` serial device connection code to
+            connect to DropBot.
+
+            If multiple DropBots are detected, automatically connect to DropBot
+            with highest version with ties going to the first serial port
+            (i.e., ``COM1`` before ``COM2``).
+
+            Offer to *flash firmware* if no DropBot is detected, or if a
+            DropBot is found with a firmware version that does not match the
+            installed driver version.
         """
         if self.control_board:
             self.control_board.terminate()
@@ -796,6 +807,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         def _attempt_connect(**kwargs):
             '''
+            .. versionadded:: 0.22
+
             Attempt connection to DropBot.
             '''
             try:
@@ -846,6 +859,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         @gtk_threadsafe
         def _offer_to_flash(message):
             '''
+            .. versionadded:: 0.22
+
             Launch user prompts in GTK main thread to offer to flash new
             DropBot firmware.
 
@@ -886,10 +901,16 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         return data_dir
 
     def check_device_name_and_version(self):
+        '''
+        .. versionchanged:: 0.22
+        '''
         raise DeprecationWarning('check_device_name_and_version is '
                                  'deprecated.')
 
     def on_flash_firmware(self, widget=None, data=None):
+        '''
+        .. versionchanged:: 0.22
+        '''
         raise DeprecationWarning('on_flash_firmware is deprecated.  Firmware '
                                  'flashing is now handled in the '
                                  '`connect_dropbot` method')
@@ -961,6 +982,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged: 0.19
             Simplify control board status label update.
+
+        .. versionchanged: 0.22
+            Use :func:`numpy.where` instead of :func:`mlab.find` since
+            :mod:`numpy` is already a dependency.
         '''
         area = self.actuated_area
         voltage = results['voltage']
