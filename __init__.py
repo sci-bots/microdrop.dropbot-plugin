@@ -21,14 +21,13 @@ import Queue
 import datetime as dt
 import json
 import logging
-import pkg_resources
 import re
 import threading
+import time
 import types
 import warnings
 import webbrowser
 
-from dropbot import SerialProxy
 from flatland import Integer, Float, Form, Enum, Boolean
 from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
@@ -49,6 +48,7 @@ from pygtkhelpers.utils import gsignal
 from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
+import base_node_rpc as bnr
 import dropbot as db
 import dropbot.hardware_test
 import dropbot.self_test
@@ -59,7 +59,6 @@ import gtk
 #
 # [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
 import json_tricks
-import microdrop_utility as utility
 import numpy as np
 import pandas as pd
 import path_helpers as ph
@@ -70,7 +69,6 @@ from ._version import get_versions
 from .noconflict import classmaker
 __version__ = get_versions()['version']
 del get_versions
-from .noconflict import classmaker
 
 # Prevent warning about potential future changes to Numpy scalar encoding
 # behaviour.
@@ -316,7 +314,6 @@ def require_test_board(func):
         if response == gtk.RESPONSE_OK:
             return func(*args, **kwargs)
     return _wrapped
-
 
 
 class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
@@ -678,7 +675,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # Periodically process outstanding message received on plugin sockets.
         self.plugin_timeout_id = gtk.timeout_add(10, self.plugin.check_sockets)
 
-        self.check_device_name_and_version()
+        self.connect_dropbot()
         if get_app().protocol:
             self.on_step_run()
             self._update_protocol_grid()
@@ -775,11 +772,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def connect_dropbot(self):
         """
-        Try to connect to the control board at the default serial port selected
-        in the Microdrop application options.
+        Try to connect to the DropBot control board.
 
-        If unsuccessful, try to connect to the control board on any available
-        serial port, one-by-one.
+        If multiple DropBots are available, automatically select DropBot with
+        highest version, with ties going to the lowest port name (i.e.,
+        ``COM1`` before ``COM2``).
 
         .. versionchanged:: 0.19
             Rename method to ``connect_dropbot`` to avoid a name collision with
@@ -796,25 +793,87 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.control_board = None
             gobject.idle_add(self.emit, 'dropbot-disconnected')
         self.current_frequency = None
-        serial_ports = list(get_serial_ports())
-        if serial_ports:
-            app_values = self.get_app_values()
-            # try to connect to the last successful port
+
+        def _attempt_connect(**kwargs):
+            '''
+            Attempt connection to DropBot.
+            '''
             try:
-                port = app_values.get('serial_port')
-                self.control_board = SerialProxy(port=port)
-            except Exception:
-                logger.warning('Could not connect to control board on port %s.'
-                               ' Checking other ports...',
-                               app_values['serial_port'], exc_info=True)
-                self.control_board = SerialProxy()
-            self.control_board.initialize_switching_boards()
-            app_values['serial_port'] = self.control_board.port
-            self.set_app_values(app_values)
-            gobject.idle_add(self.emit, 'dropbot-connected',
-                             self.control_board)
-        else:
-            raise Exception("No serial ports available.")
+                self.control_board = db.SerialProxy(**kwargs)
+                # Emit signal to notify that DropBot connection was
+                # established.
+                gobject.idle_add(self.emit, 'dropbot-connected',
+                                 self.control_board)
+            except bnr.proxy.DeviceVersionMismatch as exception:
+                # DropBot device software version does not match host software
+                # version.
+                _offer_to_flash('\n'.join([str(exception), '', 'Flash firmware'
+                                           ' version %s?' %
+                                           exception.device.device_version]))
+            except bnr.proxy.DeviceNotFound as exception:
+                # Cases:
+                #
+                #  - Device `...` does not match expected name `dropbot`.
+                #  - No named devices found.
+                #  - No dropbot device found.
+                #  - No devices found with matching name.
+                #
+                # Assume a DropBot is actually connected and offer to flash the
+                # latest firmware.
+                messages = ['\n'.join(['DropBot could not be detected.' '',
+                                       'Is a DropBot plugged in?']),
+                            'Flash firmware version %s?' % db.__version__]
+                _offer_to_flash(messages)
+            except bnr.proxy.MultipleDevicesFound:
+                # Multiple DropBot devices were found.
+                # Get list of available devices.
+                df_comports = bnr.available_devices(timeout=.1)
+                # Automatically select DropBot with highest version, with ties
+                # going to the lowest port name (i.e., `COM1` before `COM2`).
+                df_comports = df_comports.loc[df_comports.device_name ==
+                                              'dropbot'].copy()
+                df_comports.reset_index(inplace=True)
+                df_comports.sort_values(['device_version', 'port'],
+                                        ascending=[False, True], inplace=True)
+                df_comports.set_index('port', inplace=True)
+                port = df_comports.index[0]
+                # Attempt to connect to automatically selected port.
+                _attempt_connect(port=port,
+                                 ignore=[bnr.proxy.MultipleDevicesFound])
+            except Exception as exception:
+                gobject.idle_add(logger.error, str(exception))
+
+        @gtk_threadsafe
+        def _offer_to_flash(message):
+            '''
+            Launch user prompts in GTK main thread to offer to flash new
+            DropBot firmware.
+
+            Parameters
+            ----------
+            message : str or list
+                One or more messages to ask the user.
+
+                Firmware is only flashed if user answers **Yes** to all
+                questions.
+            '''
+            if isinstance(message, types.StringTypes):
+                message = [message]
+
+            for message_i in message:
+                response = yesno(message_i)
+                if response != gtk.RESPONSE_YES:
+                    # User answered no, so do not flash firmware.
+                    break
+            else:
+                # User answered yes to all questions.
+                logger.debug('Upload DropBot firmware version %s',
+                            db.__version__)
+                db.bin.upload.upload()
+                time.sleep(0.5)
+                _attempt_connect()
+
+        _attempt_connect()
 
     def data_dir(self):
         '''
@@ -827,67 +886,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         return data_dir
 
     def check_device_name_and_version(self):
-        """
-        Check to see if:
-
-         a) The connected device is a DropBot
-         b) The device firmware matches the host driver API version
-
-        In the case where the device firmware version does not match, display a
-        dialog offering to flash the device with the firmware version that
-        matches the host driver API version.
-        """
-        try:
-            self.connect_dropbot()
-            name = self.control_board.properties['package_name']
-            if name != self.control_board.host_package_name:
-                raise Exception("Device is not a DropBot")
-
-            host_software_version = utility.Version.fromstring(
-                str(self.control_board.host_software_version))
-            remote_software_version = utility.Version.fromstring(
-                str(self.control_board.remote_software_version))
-
-            @gtk_threadsafe
-            def _firmware_check():
-                # Offer to reflash the firmware if the major and minor versions
-                # are not not identical. If micro versions are different, the
-                # firmware is assumed to be compatible. See [1]
-                #
-                # [1]: https://github.com/wheeler-microfluidics/base-node-rpc/issues/8
-                if any([host_software_version.major !=
-                        remote_software_version.major,
-                        host_software_version.minor !=
-                        remote_software_version.minor]):
-                    response = yesno("The DropBot firmware version (%s) does "
-                                     "not match the driver version (%s). "
-                                     "Update firmware?" %
-                                     (remote_software_version,
-                                      host_software_version))
-                    if response == gtk.RESPONSE_YES:
-                        self.on_flash_firmware()
-
-            # Call as thread-safe function, since function uses GTK.
-            _firmware_check()
-        except pkg_resources.DistributionNotFound:
-            logger.debug('No distribution found for `%s`.  This may occur if, '
-                         'e.g., `%s` is installed using `conda develop .`',
-                         name, name, exc_info=True)
-        except Exception, why:
-            logger.warning("%s" % why)
+        raise DeprecationWarning('check_device_name_and_version is '
+                                 'deprecated.')
 
     def on_flash_firmware(self, widget=None, data=None):
-        app = get_app()
-        try:
-            connected = self.control_board is not None
-            if not connected:
-                self.connect_dropbot()
-            self.control_board.flash_firmware()
-            app.main_window_controller.info("Firmware updated successfully.",
-                                            "Firmware update")
-        except Exception, why:
-            logger.error("Problem flashing firmware. ""%s" % why)
-        self.check_device_name_and_version()
+        raise DeprecationWarning('on_flash_firmware is deprecated.  Firmware '
+                                 'flashing is now handled in the '
+                                 '`connect_dropbot` method')
 
     def update_connection_status(self):
         '''
