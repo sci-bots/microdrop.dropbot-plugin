@@ -883,7 +883,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             else:
                 # User answered yes to all questions.
                 logger.debug('Upload DropBot firmware version %s',
-                            db.__version__)
+                             db.__version__)
                 db.bin.upload.upload()
                 time.sleep(0.5)
                 _attempt_connect()
