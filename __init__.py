@@ -363,6 +363,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Set ``threading.Event`` when DropBot connection is established.
 
             Set ``threading.Event`` when DMF chip is inserted.
+
+        .. versionchanged:: 2.22.4
+            Register update of connection status when DropBot connects or
+            disconnects.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -393,6 +397,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.connect('chip-removed', lambda *args:
                      self.chip_inserted.clear())
         self.connect('chip-removed', lambda *args:
+                     self.update_connection_status())
+        self.connect('dropbot-connected', lambda *args:
+                     self.update_connection_status())
+        self.connect('dropbot-disconnected', lambda *args:
                      self.update_connection_status())
 
         def _on_dropbot_connected(*args):
@@ -657,6 +665,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 0.19
             Launch background thread to monitor for DMF chip status events from
             DropBot serial stream.
+
+        .. versionchanged:: 2.22.4
+            Initialize connection status before attempting to connect to
+            DropBot.  This allows, for example, menu items requiring a DropBot
+            to default to non-sensitive.
         '''
         super(DropBotPlugin, self).on_plugin_enable()
         if not self.menu_items:
@@ -666,6 +679,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             gobject.idle_add(self.create_ui)
 
         self.cleanup_plugin()
+        self.update_connection_status()
+
         # Initialize 0MQ hub plugin and subscribe to hub messages.
         self.plugin = DmfZmqPlugin(self, self.name, get_hub_uri(),
                                    subscribe_options={zmq.SUBSCRIBE: ''})
