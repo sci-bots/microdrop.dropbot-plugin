@@ -334,7 +334,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     # [1]: http://code.activestate.com/recipes/204197-solving-the-metaclass-conflict/
     __metaclass__ = classmaker()
 
-    # ..versionadded:: 0.19
+    #: ..versionadded:: 0.19
     gsignal('dropbot-connected', object)
     gsignal('dropbot-disconnected')
     gsignal('chip-inserted')
@@ -587,10 +587,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                                    optional=True),
             Boolean.named('Auto-run diagnostic tests').using(default=True,
                                                              optional=True),
-            # .. versionadded: 0.18
+            #: .. versionadded: 0.18
             Float.named('c_liquid').using(default=0, optional=True,
                                           properties={'show_in_gui': False}),
-            # .. versionadded: 0.18
+            #: .. versionadded: 0.18
             Float.named('c_filler').using(default=0, optional=True,
                                           properties={'show_in_gui': False}))
 
@@ -613,13 +613,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           check_frequency]),
-                       # .. versionadded: 0.18
+                       #: .. versionadded: 0.18
                        Float.named('volume_threshold')
                        .using(default=0,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           ValueAtMost(maximum=1.0)]),
-                       # .. versionadded: 0.18
+                       #: .. versionadded: 0.18
                        Integer.named('max_repeats')
                        .using(default=3,
                               optional=True,
