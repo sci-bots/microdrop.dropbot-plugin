@@ -334,7 +334,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     # [1]: http://code.activestate.com/recipes/204197-solving-the-metaclass-conflict/
     __metaclass__ = classmaker()
 
-    # ..versionadded:: 0.19
+    #: ..versionadded:: 0.19
     gsignal('dropbot-connected', object)
     gsignal('dropbot-disconnected')
     gsignal('chip-inserted')
@@ -576,25 +576,21 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     @property
     def AppFields(self):
-        serial_ports = list(get_serial_ports())
-        if len(serial_ports):
-            default_port = serial_ports[0]
-        else:
-            default_port = None
-
+        '''
+        .. versionchanged:: 0.22.2
+            Remove serial port, which is no longer used as of version 0.22.
+        '''
         return Form.of(
-            Enum.named('serial_port')
-            .using(default=default_port, optional=True).valued(*serial_ports),
             Float.named('default_duration').using(default=1000, optional=True),
             Float.named('default_voltage').using(default=80, optional=True),
             Float.named('default_frequency').using(default=10e3,
                                                    optional=True),
             Boolean.named('Auto-run diagnostic tests').using(default=True,
                                                              optional=True),
-            # .. versionadded: 0.18
+            #: .. versionadded: 0.18
             Float.named('c_liquid').using(default=0, optional=True,
                                           properties={'show_in_gui': False}),
-            # .. versionadded: 0.18
+            #: .. versionadded: 0.18
             Float.named('c_filler').using(default=0, optional=True,
                                           properties={'show_in_gui': False}))
 
@@ -617,13 +613,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           check_frequency]),
-                       # .. versionadded: 0.18
+                       #: .. versionadded: 0.18
                        Float.named('volume_threshold')
                        .using(default=0,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           ValueAtMost(maximum=1.0)]),
-                       # .. versionadded: 0.18
+                       #: .. versionadded: 0.18
                        Integer.named('max_repeats')
                        .using(default=3,
                               optional=True,
@@ -752,19 +748,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             pgc.update_grid()
 
     def on_app_options_changed(self, plugin_name):
+        '''
+        .. versionchanged:: 0.22.2
+            Remove check for serial port, which is no longer used as of version
+            0.22.
+        '''
         app = get_app()
         if plugin_name == self.name:
-            app_values = self.get_app_values()
-            reconnect = False
-
-            if self.control_board:
-                for k, v in app_values.items():
-                    if k == 'serial_port' and self.control_board.port != v:
-                        reconnect = True
-
-            if reconnect:
-                self.connect_dropbot()
-
             self._update_protocol_grid()
         elif plugin_name == app.name:
             # Turn off all electrodes if we're not in realtime mode and not
