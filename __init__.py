@@ -364,7 +364,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
             Set ``threading.Event`` when DMF chip is inserted.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.22.4
             Register update of connection status when DropBot connects or
             disconnects.
         '''
@@ -666,7 +666,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Launch background thread to monitor for DMF chip status events from
             DropBot serial stream.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.22.4
             Initialize connection status before attempting to connect to
             DropBot.  This allows, for example, menu items requiring a DropBot
             to default to non-sensitive.
