@@ -577,7 +577,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @property
     def AppFields(self):
         '''
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 0.22.2
             Remove serial port, which is no longer used as of version 0.22.
         '''
         return Form.of(
@@ -749,7 +749,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def on_app_options_changed(self, plugin_name):
         '''
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 0.22.2
             Remove check for serial port, which is no longer used as of version
             0.22.
         '''
