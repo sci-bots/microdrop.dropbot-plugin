@@ -396,9 +396,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                      self.update_connection_status())
 
         def _on_dropbot_connected(*args):
+            # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
             OUTPUT_ENABLE_PIN = 22
-            # Check if chip is inserted by reading active low OUTPUT_ENABLE_PIN.
+            # Chip may have been inserted before connecting, so `chip-inserted`
+            # event may have been missed.
+            # Explicitly check if chip is inserted by reading **active low**
+            # `OUTPUT_ENABLE_PIN`.
             if self.control_board.digital_read(OUTPUT_ENABLE_PIN):
                 self.emit('chip-removed')
             else:
@@ -883,7 +887,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             else:
                 # User answered yes to all questions.
                 logger.debug('Upload DropBot firmware version %s',
-                            db.__version__)
+                             db.__version__)
                 db.bin.upload.upload()
                 time.sleep(0.5)
                 _attempt_connect()
