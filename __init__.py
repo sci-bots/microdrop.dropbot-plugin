@@ -704,6 +704,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
             Translate incoming events to g-signal events so GUI code may
             respond to events where necessary.
+
+            .. versionchanged:: X.X.X
+                Gracefully handle scenario where control board disconnects
+                after loop iteration has started, but before the reference to
+                the `queues` control board attribute is resolved.
             '''
             # Wait for DropBot to connect.
             while self.dropbot_connected.wait():
@@ -723,6 +728,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     pass
                 except ValueError:
                     pass
+                except AttributeError as exception:
+                    if str(exception).strip().endswith("no attribute 'queues'"):
+                        # `self.control_board` is `None` (i.e., DropBot
+                        # disconnected).
+                        continue
+                    else:
+                        raise
 
         if self.chip_watch_thread is None:
             self.chip_watch_thread = threading.Thread(target=_watch_for_chip)
