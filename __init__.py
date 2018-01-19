@@ -367,6 +367,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.22.4
             Register update of connection status when DropBot connects or
             disconnects.
+
+        .. versionchanged:: 2.22.5
+            Revert 2.22.4 changes since connection status is already updated
+            when ``chip-removed`` or ``chip-inserted`` signals are emitted, and
+            one of these signals is emitted whenever the DropBot either
+            connects or disconnects.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -397,10 +403,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.connect('chip-removed', lambda *args:
                      self.chip_inserted.clear())
         self.connect('chip-removed', lambda *args:
-                     self.update_connection_status())
-        self.connect('dropbot-connected', lambda *args:
-                     self.update_connection_status())
-        self.connect('dropbot-disconnected', lambda *args:
                      self.update_connection_status())
 
         def _on_dropbot_connected(*args):
@@ -702,6 +704,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
             Translate incoming events to g-signal events so GUI code may
             respond to events where necessary.
+
+            .. versionchanged:: 2.22.5
+                Gracefully handle scenario where control board disconnects
+                after loop iteration has started, but before the reference to
+                the `queues` control board attribute is resolved.
             '''
             # Wait for DropBot to connect.
             while self.dropbot_connected.wait():
@@ -721,6 +728,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     pass
                 except ValueError:
                     pass
+                except AttributeError as exception:
+                    if str(exception).strip().endswith("no attribute 'queues'"):
+                        # `self.control_board` is `None` (i.e., DropBot
+                        # disconnected).
+                        continue
+                    else:
+                        raise
 
         if self.chip_watch_thread is None:
             self.chip_watch_thread = threading.Thread(target=_watch_for_chip)
