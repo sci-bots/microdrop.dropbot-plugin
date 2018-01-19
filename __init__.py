@@ -367,6 +367,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.22.4
             Register update of connection status when DropBot connects or
             disconnects.
+
+        .. versionchanged:: X.X.X
+            Revert 2.22.4 changes since connection status is already updated
+            when ``chip-removed`` or ``chip-inserted`` signals are emitted, and
+            one of these signals is emitted whenever the DropBot either
+            connects or disconnects.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -397,10 +403,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.connect('chip-removed', lambda *args:
                      self.chip_inserted.clear())
         self.connect('chip-removed', lambda *args:
-                     self.update_connection_status())
-        self.connect('dropbot-connected', lambda *args:
-                     self.update_connection_status())
-        self.connect('dropbot-disconnected', lambda *args:
                      self.update_connection_status())
 
         def _on_dropbot_connected(*args):
