@@ -368,7 +368,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Register update of connection status when DropBot connects or
             disconnects.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.22.5
             Revert 2.22.4 changes since connection status is already updated
             when ``chip-removed`` or ``chip-inserted`` signals are emitted, and
             one of these signals is emitted whenever the DropBot either
@@ -705,7 +705,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Translate incoming events to g-signal events so GUI code may
             respond to events where necessary.
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.22.5
                 Gracefully handle scenario where control board disconnects
                 after loop iteration has started, but before the reference to
                 the `queues` control board attribute is resolved.
