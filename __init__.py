@@ -597,10 +597,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                                    optional=True),
             Boolean.named('Auto-run diagnostic tests').using(default=True,
                                                              optional=True),
-            #: .. versionadded: 0.18
+            #: .. versionadded:: 0.18
             Float.named('c_liquid').using(default=0, optional=True,
                                           properties={'show_in_gui': False}),
-            #: .. versionadded: 0.18
+            #: .. versionadded:: 0.18
             Float.named('c_filler').using(default=0, optional=True,
                                           properties={'show_in_gui': False}))
 
@@ -623,13 +623,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           check_frequency]),
-                       #: .. versionadded: 0.18
+                       #: .. versionadded:: 0.18
                        Float.named('volume_threshold')
                        .using(default=0,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           ValueAtMost(maximum=1.0)]),
-                       #: .. versionadded: 0.18
+                       #: .. versionadded:: 0.18
                        Integer.named('max_repeats')
                        .using(default=3,
                               optional=True,
@@ -915,7 +915,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def data_dir(self):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         app = get_app()
         data_dir = app.experiment_log.get_log_path().joinpath(self.name)
@@ -989,7 +989,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         and send an 'on_device_capacitance_update' signal to update to
         any listeners.
 
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         c = self.control_board.measure_capacitance()
         v = self.control_board.measure_voltage()
@@ -1001,12 +1001,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def on_device_capacitance_update(self, results):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
 
-        .. versionchanged: 0.19
+        .. versionchanged:: 0.19
             Simplify control board status label update.
 
-        .. versionchanged: 0.22
+        .. versionchanged:: 0.22
             Use :func:`numpy.where` instead of :func:`mlab.find` since
             :mod:`numpy` is already a dependency.
         '''
@@ -1064,7 +1064,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def _calibrate_device_capacitance(self, name):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         a = self.actuated_area
         if self.control_board is None:
@@ -1117,13 +1117,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def on_measure_liquid_capacitance(self):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         self._calibrate_device_capacitance('liquid')
 
     def on_measure_filler_capacitance(self):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         self._calibrate_device_capacitance('filler')
 
@@ -1378,7 +1378,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @gtk_threadsafe
     def _use_cached_capacitance_prompt(self):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         app_values = self.get_app_values()
         if (self.control_board and (app_values['c_liquid'] > 0 or
