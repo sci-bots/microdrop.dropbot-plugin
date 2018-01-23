@@ -19,6 +19,7 @@ along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 from functools import wraps
 import Queue
 import datetime as dt
+import inspect
 import json
 import logging
 import re
@@ -74,7 +75,18 @@ del get_versions
 # behaviour.
 json_tricks.NumpyEncoder.SHOW_SCALAR_WARNING = False
 
-logger = logging.getLogger(__name__)
+# Short alias for `inspect.currentframe`
+_I = inspect.currentframe
+
+
+def _N(n):
+    '''Shorthand to join function name to module name.'''
+    return '.'.join((__name__, n))
+
+
+def _L(frame):
+    '''Shorthand to get logger for current function frame.'''
+    return logging.getLogger(_N(frame.f_code.co_name))
 
 
 # Ignore natural name warnings from PyTables [1].
@@ -136,8 +148,8 @@ class DmfZmqPlugin(ZmqPlugin):
         except zmq.Again:
             pass
         except Exception:
-            logger.error('Error processing message from subscription '
-                         'socket.', exc_info=True)
+            _L(_I()).error('Error processing message from subscription '
+                           'socket.', exc_info=True)
         return True
 
 
@@ -256,7 +268,7 @@ def require_connection(func):
     @wraps(func)
     def _wrapped(self, *args, **kwargs):
         if not self.dropbot_connected.is_set():
-            logger.error('DropBot is not connected.')
+            _L(_I()).error('DropBot is not connected.')
         else:
             return func(self, *args, **kwargs)
     return _wrapped
@@ -448,8 +460,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     @gtk_threadsafe  # Execute in GTK main thread
     @error_ignore(lambda exception, func, self, test_name, *args:
-                  logger.error('Error executing: "%s"', test_name,
-                               exc_info=True))
+                  _L(_I()).error('Error executing: "%s"', test_name,
+                                 exc_info=True))
     @require_connection  # Display error dialog if DropBot is not connected.
     def execute_test(self, test_name, axis_count=1):
         '''
@@ -465,7 +477,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         db.hardware_test.log_results(results, self.diagnostics_results_dir)
         format_func = getattr(db.self_test, 'format_%s_results' % test_name)
         message = format_func(results[test_name])
-        map(logger.info, map(unicode.rstrip, unicode(message).splitlines()))
+        map(_L(_I()).info, map(unicode.rstrip, unicode(message).splitlines()))
 
         app = get_app()
         parent = app.main_window_controller.view
@@ -476,8 +488,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     @gtk_threadsafe  # Execute in GTK main thread
     @error_ignore(lambda *args:
-                  logger.error('Error executing DropBot self tests.',
-                               exc_info=True))
+                  _L(_I()).error('Error executing DropBot self tests.',
+                                 exc_info=True))
     @require_connection  # Display error dialog if DropBot is not connected.
     @require_test_board  # Prompt user to insert DropBot test board
     def run_all_tests(self):
@@ -636,7 +648,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                               validators=[ValueAtLeast(minimum=0)]))
 
     def update_channel_states(self, channel_states):
-        logging.info('update_channel_states')
+        _L(_I()).info('update_channel_states')
         # Update locally cached channel states with new modified states.
         try:
             self.channel_states = channel_states.combine_first(self
@@ -790,7 +802,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # running a protocol.
             if self.control_board and (not app.realtime_mode and
                                        not app.running):
-                logger.info('Turning off all electrodes.')
+                _L(_I()).info('Turning off all electrodes.')
                 self.control_board.hv_output_enabled = False
 
     def connect_dropbot(self):
@@ -877,7 +889,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 _attempt_connect(port=port,
                                  ignore=[bnr.proxy.MultipleDevicesFound])
             except Exception as exception:
-                gobject.idle_add(logger.error, str(exception))
+                gobject.idle_add(_L(_I()).error, str(exception))
 
         @gtk_threadsafe
         def _offer_to_flash(message):
@@ -905,8 +917,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     break
             else:
                 # User answered yes to all questions.
-                logger.debug('Upload DropBot firmware version %s',
-                             db.__version__)
+                _L(_I()).debug('Upload DropBot firmware version %s',
+                               db.__version__)
                 db.bin.upload.upload()
                 time.sleep(0.5)
                 _attempt_connect()
@@ -1035,10 +1047,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                                  label]))
 
         options = self.get_step_options()
-        logger.info('on_device_capacitance_update():')
-        logger.info('\tset_voltage=%.1f, measured_voltage=%.1f, '
-                    'error=%.1f%%', options['voltage'], voltage,
-                    100 * (voltage - options['voltage']) / options['voltage'])
+        _L(_I()).info('on_device_capacitance_update():')
+        _L(_I()).info('\tset_voltage=%.1f, measured_voltage=%.1f, '
+                      'error=%.1f%%', options['voltage'], voltage, 100 *
+                      (voltage - options['voltage']) / options['voltage'])
 
         # TODO: check that the voltage is within tolerance
 
@@ -1068,10 +1080,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         a = self.actuated_area
         if self.control_board is None:
-            logger.error('DropBot is not connected.')
+            _L(_I()).error('DropBot is not connected.')
         elif a == 0:
-            logger.error('At least one electrode must be actuated to perform '
-                         'calibration.')
+            _L(_I()).error('At least one electrode must be actuated to perform'
+                           ' calibration.')
         else:
             max_channels = self.control_board.number_of_channels
             # All channels should default to off.
@@ -1090,14 +1102,15 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
             # enable high voltage
             if not self.control_board.hv_output_enabled:
+                # XXX Only set if necessary, since there is a ~200 ms delay.
                 self.control_board.hv_output_enabled = True
 
             # perform the capacitance measurement
             self.control_board.set_state_of_channels(channel_states)
             c = self.control_board.measure_capacitance()
-            logger.info("on_measure_%s_capacitance: "
-                        "%.1f pF/%.1f mm^2 = %.1f pF/mm^2" % (name, c * 1e12,
-                                                              a, c / a * 1e12))
+            _L(_I()).info("on_measure_%s_capacitance: "
+                          "%.1f pF/%.1f mm^2 = %.1f pF/mm^2" %
+                          (name, c * 1e12, a, c / a * 1e12))
             app_values = {}
             app_values['c_%s' % name] = c / a
             self.set_app_values(app_values)
@@ -1146,7 +1159,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             actuation in real-time mode, or b) after step duration is complete
             when protocol is running.
         """
-        logger.debug('[DropBotPlugin] on_step_run()')
+        _L(_I()).debug('[DropBotPlugin] on_step_run()')
         self._kill_running_step()
         app = get_app()
         options = self.get_step_options()
@@ -1176,9 +1189,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         # if a protocol is running, wait for the specified minimum duration
         if app.running:
-            logger.debug('[DropBotPlugin] on_step_run: '
-                         'timeout_add(%d, _callback_step_completed)' %
-                         options['duration'])
+            _L(_I()).debug('[DropBotPlugin] on_step_run: '
+                           'timeout_add(%d, _callback_step_completed)' %
+                           options['duration'])
             self.timeout_id = gobject.timeout_add(
                 options['duration'], self._callback_step_completed)
             return
@@ -1196,8 +1209,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def _kill_running_step(self):
         if self.timeout_id:
-            logger.debug('[DropBotPlugin] _kill_running_step: removing'
-                         'timeout_id=%d' % self.timeout_id)
+            _L(_I()).debug('[DropBotPlugin] _kill_running_step: removing'
+                           'timeout_id=%d' % self.timeout_id)
             gobject.source_remove(self.timeout_id)
 
     def _callback_step_completed(self):
@@ -1238,7 +1251,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         else:
             info_msg += '. OK'
 
-        logger.info(info_msg)
+        _L(_I()).info(info_msg)
         self.step_complete(return_value)
         return False  # stop the timeout from refiring
 
@@ -1248,11 +1261,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         app = get_app()
         if not self.control_board:
-            logger.warning("Warning: no control board connected.")
+            _L(_I()).warning("Warning: no control board connected.")
         elif (self.control_board.number_of_channels <=
               app.dmf_device.max_channel()):
-            logger.warning("Warning: currently connected board does not have "
-                           "enough channels for this protocol.")
+            _L(_I()).warning("Warning: currently connected board does not have"
+                             " enough channels for this protocol.")
 
     def on_protocol_pause(self):
         """
@@ -1262,7 +1275,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self._kill_running_step()
         if self.control_board and not app.realtime_mode:
             # Turn off all electrodes
-            logger.debug('Turning off all electrodes.')
+            _L(_I()).debug('Turning off all electrodes.')
             self.control_board.hv_output_enabled = False
 
     def on_experiment_log_selection_changed(self, data):
@@ -1281,7 +1294,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         Parameters:
             voltage : RMS voltage
         """
-        logger.info("set_voltage(%.1f)" % voltage)
+        _L(_I()).info("%.1f" % voltage)
         self.control_board.voltage = voltage
 
     def set_frequency(self, frequency):
@@ -1291,13 +1304,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         Parameters:
             frequency : frequency in Hz
         """
-        logger.info("set_frequency(%.1f)" % frequency)
+        _L(_I()).info("%.1f" % frequency)
         self.control_board.frequency = frequency
         self.current_frequency = frequency
 
     def on_step_options_changed(self, plugin, step_number):
-        logger.info('on_step_options_changed(): %s step #%d',
-                    plugin, step_number)
+        _L(_I()).info('%s step #%d', plugin, step_number)
         app = get_app()
         if (app.protocol and not app.running and not app.realtime_mode and
             (plugin == 'microdrop.gui.dmf_device_controller' or plugin ==
@@ -1305,9 +1317,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.on_step_run()
 
     def on_step_swapped(self, original_step_number, new_step_number):
-        logger.info('on_step_swapped():'
-                    'original_step_number=%d, new_step_number=%d',
-                    original_step_number, new_step_number)
+        _L(_I()).info('original_step_number=%d, new_step_number=%d',
+                      original_step_number, new_step_number)
         self.on_step_options_changed(self.name,
                                      get_app().protocol.current_step_number)
 
@@ -1358,7 +1369,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         if self.dropbot_connected.is_set() and app_values.get('Auto-run '
                                                               'diagnostic '
                                                               'tests'):
-            logger.info('Running diagnostic tests')
+            _L(_I()).info('Running diagnostic tests')
             tests = ['system_info',
                      'test_i2c',
                      'test_voltage',
@@ -1371,7 +1382,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 results[test] = test_func(self.control_board)
             db.hardware_test.log_results(results, self.diagnostics_results_dir)
         else:
-            logger.info('DropBot not connected - not running diagnostic tests')
+            _L(_I()).info('DropBot not connected - not running diagnostic tests')
 
         self._use_cached_capacitance_prompt()
 
