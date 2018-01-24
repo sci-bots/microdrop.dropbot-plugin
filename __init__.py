@@ -422,6 +422,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.actuated_area = 0
 
         #: .. versionadded:: X.X.X
+        self.actuation_voltage = 0
+
+        #: .. versionadded:: X.X.X
         self.device_time_sync = {}
 
         self.chip_watch_thread = None
@@ -1328,6 +1331,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         _L(_I()).info("%.1f" % voltage)
         self.control_board.voltage = voltage
+
+        # Cache measured actuation voltage. Delay before measuring the
+        # actuation voltage to give it time to settle.
+        gobject.timeout_add(100, lambda *args:
+                            setattr(self, 'actuation_voltage',
+                                    self.control_board.measure_voltage()))
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_frequency(self, frequency):
