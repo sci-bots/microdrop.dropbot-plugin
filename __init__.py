@@ -261,17 +261,34 @@ def results_dialog(name, results, axis_count=1, parent=None):
     return dialog
 
 
-def require_connection(func):
+def require_connection(log_level='error'):
     '''
-    Decorator to require DropBot connection.
+    Decorator factory to require DropBot connection.
+
+    Parameters
+    ----------
+    log_level : str
+        Level to log message to if DropBot is not connect.
+
+    Returns
+    -------
+    function
+        Decorator to require DropBot connection.
+
+    .. versionchanged:: X.X.X
+        Convert to decorator factory to add optional log-level customization.
     '''
-    @wraps(func)
-    def _wrapped(self, *args, **kwargs):
-        if not self.dropbot_connected.is_set():
-            _L(_I()).error('DropBot is not connected.')
-        else:
-            return func(self, *args, **kwargs)
-    return _wrapped
+    def _require_connection(func):
+        @wraps(func)
+        def _wrapped(self, *args, **kwargs):
+            if not self.dropbot_connected.is_set():
+                logger = _L(_I())
+                log_func = getattr(logger, log_level)
+                log_func('DropBot is not connected.')
+            else:
+                return func(self, *args, **kwargs)
+        return _wrapped
+    return _require_connection
 
 
 def error_ignore(on_error=None):
@@ -462,7 +479,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @error_ignore(lambda exception, func, self, test_name, *args:
                   _L(_I()).error('Error executing: "%s"', test_name,
                                  exc_info=True))
-    @require_connection  # Display error dialog if DropBot is not connected.
+    @require_connection()  # Display error dialog if DropBot is not connected.
     def execute_test(self, test_name, axis_count=1):
         '''
         Run single DropBot on-board self-diagnostic test.
@@ -490,7 +507,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @error_ignore(lambda *args:
                   _L(_I()).error('Error executing DropBot self tests.',
                                  exc_info=True))
-    @require_connection  # Display error dialog if DropBot is not connected.
+    @require_connection()  # Display error dialog if DropBot is not connected.
     @require_test_board  # Prompt user to insert DropBot test board
     def run_all_tests(self):
         '''
@@ -995,6 +1012,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 .set_text(self.connection_status)
         _update_ui_connected_status()
 
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def measure_capacitance(self):
         '''
         Measure the capacitance of all actuated electrodes on the device
@@ -1287,6 +1305,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         pass
 
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_voltage(self, voltage):
         """
         Set the waveform voltage.
@@ -1297,6 +1316,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         _L(_I()).info("%.1f" % voltage)
         self.control_board.voltage = voltage
 
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_frequency(self, frequency):
         """
         Set the waveform frequency.
