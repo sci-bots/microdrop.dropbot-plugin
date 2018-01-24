@@ -659,8 +659,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             logging.info('', exc_info=True)
         else:
             app = get_app()
-            connected = self.control_board is not None
-            if connected and (app.realtime_mode or app.running):
+            if self.dropbot_connected.is_set() and (app.realtime_mode or
+                                                    app.running):
                 self.on_step_run()
 
     def cleanup_plugin(self):
@@ -668,7 +668,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             gobject.source_remove(self.plugin_timeout_id)
         if self.plugin is not None:
             self.plugin = None
-        if self.control_board is not None:
+        if self.dropbot_connected.is_set():
             self.control_board.hv_output_enabled = False
             self.control_board.terminate()
             self.control_board = None
@@ -800,8 +800,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         elif plugin_name == app.name:
             # Turn off all electrodes if we're not in realtime mode and not
             # running a protocol.
-            if self.control_board and (not app.realtime_mode and
-                                       not app.running):
+            if self.dropbot_connected.is_set() and (not app.realtime_mode and
+                                                    not app.running):
                 _L(_I()).info('Turning off all electrodes.')
                 self.control_board.hv_output_enabled = False
 
@@ -1079,7 +1079,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionadded:: 0.18
         '''
         a = self.actuated_area
-        if self.control_board is None:
+        if not self.dropbot_connected.is_set():
             _L(_I()).error('DropBot is not connected.')
         elif a == 0:
             _L(_I()).error('At least one electrode must be actuated to perform'
@@ -1273,7 +1273,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         app = get_app()
         self._kill_running_step()
-        if self.control_board and not app.realtime_mode:
+        if self.dropbot_connected.is_set() and not app.realtime_mode:
             # Turn off all electrodes
             _L(_I()).debug('Turning off all electrodes.')
             self.control_board.hv_output_enabled = False
@@ -1392,8 +1392,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionadded:: 0.18
         '''
         app_values = self.get_app_values()
-        if (self.control_board and (app_values['c_liquid'] > 0 or
-                                    app_values['c_filler'] > 0)):
+        if (self.dropbot_connected.is_set() and (app_values['c_liquid'] > 0 or
+                                                 app_values['c_filler'] > 0)):
             response = yesno('Use cached value for c<sub>liquid</sub> '
                              'and c<sub>filler</sub>?')
             # reset the cached capacitance values
