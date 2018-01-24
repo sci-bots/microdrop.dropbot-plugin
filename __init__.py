@@ -1031,7 +1031,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         # Schedule update of control board status label in main GTK thread.
         gobject.idle_add(app.main_window_controller.label_control_board_status
-                         .set_text, ', '.join([self.connection_status, label]))
+                         .set_markup, ', '.join([self.connection_status,
+                                                 label]))
 
         options = self.get_step_options()
         logger.info('on_device_capacitance_update():')
