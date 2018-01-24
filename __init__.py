@@ -1058,13 +1058,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         c = self.control_board.measure_capacitance()
         v = self.control_board.measure_voltage()
-        results = {'capacitance': c,
-                   'voltage': v}
         # send a signal to update the gui
-        emit_signal('on_device_capacitance_update', results)
+        emit_signal('on_device_capacitance_update', c)
         return dict(capacitance=c, voltage=v)
 
-    def on_device_capacitance_update(self, results):
+    def on_device_capacitance_update(self, capacitance):
         '''
         .. versionadded:: 0.18
 
@@ -1074,10 +1072,22 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 0.22
             Use :func:`numpy.where` instead of :func:`mlab.find` since
             :mod:`numpy` is already a dependency.
+
+        .. versionchanged:: X.X.X
+            Change method signature to accept capacitance as only argument.
+
+            Deprecate CSV logging on capacitance update.  Multiple capacitance
+            measurements are instead logged at the end of each step to a
+            GZip-compressed CSV file.
+
+        Parameters
+        ----------
+        capacitance : float
+            Device load capacitance value.
         '''
-        area = self.actuated_area
-        voltage = results['voltage']
-        capacitance = results['capacitance']
+        # Use cached actuation voltage measurement taken ~100 ms after voltage
+        # was set.
+        voltage = self.actuation_voltage
 
         app = get_app()
         app_values = self.get_app_values()
@@ -1099,33 +1109,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                          .set_markup, ', '.join([self.connection_status,
                                                  label]))
 
-        options = self.get_step_options()
-        _L(_I()).info('on_device_capacitance_update():')
-        _L(_I()).info('\tset_voltage=%.1f, measured_voltage=%.1f, '
-                      'error=%.1f%%', options['voltage'], voltage, 100 *
-                      (voltage - options['voltage']) / options['voltage'])
-
-        # TODO: check that the voltage is within tolerance
-
-        # Append data to CSV file.
-        csv_output_path = self.data_dir().joinpath('data.csv')
-        # Only include header if the file does not exist or is empty.
-        include_header = not (csv_output_path.isfile() and
-                              (csv_output_path.size > 0))
-
-        df = pd.DataFrame(dict(
-            utc_timestamp=[dt.datetime.utcnow()],
-            area=[area],
-            step=[app.protocol.current_step_number + 1],
-            attempt=[app.protocol.current_step_attempt],
-            voltage=[voltage],
-            capacitance=[capacitance],
-            channels=[np.where(self.control_board
-                               .state_of_channels)[0].tolist()]))
-
-        with csv_output_path.open('a') as output:
-            df.to_csv(output, index=False,
-                      header=include_header)
 
     def _calibrate_device_capacitance(self, name):
         '''
@@ -1145,6 +1128,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             channel_states[self.channel_states.index
                            .values.tolist()] = self.channel_states
 
+            # enable high voltage
+            if not self.control_board.hv_output_enabled:
+                # XXX Only set if necessary, since there is a ~200 ms delay.
+                self.control_board.hv_output_enabled = True
+
             # set the voltage and frequency specified for the current step
             options = self.get_step_options()
             emit_signal("set_frequency",
@@ -1152,11 +1140,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                         interface=IWaveformGenerator)
             emit_signal("set_voltage", options['voltage'],
                         interface=IWaveformGenerator)
-
-            # enable high voltage
-            if not self.control_board.hv_output_enabled:
-                # XXX Only set if necessary, since there is a ~200 ms delay.
-                self.control_board.hv_output_enabled = True
 
             # perform the capacitance measurement
             self.control_board.set_state_of_channels(channel_states)
@@ -1168,11 +1151,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             app_values['c_%s' % name] = c / a
             self.set_app_values(app_values)
 
-            v = self.control_board.measure_voltage()
-            results = {'capacitance': c,
-                       'voltage': v}
             # send a signal to update the gui
-            emit_signal('on_device_capacitance_update', results)
+            emit_signal('on_device_capacitance_update', c)
 
             # Turn off all electrodes and disable high voltage if we're
             # not in realtime mode.
