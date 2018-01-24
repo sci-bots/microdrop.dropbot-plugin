@@ -421,6 +421,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.diagnostics_results_dir = '.dropbot-diagnostics'
         self.actuated_area = 0
 
+        #: .. versionadded:: X.X.X
+        self.device_time_sync = {}
+
         self.chip_watch_thread = None
         self._chip_inserted = threading.Event()
         self._dropbot_connected = threading.Event()
@@ -435,8 +438,14 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                      self.update_connection_status())
 
         def _on_dropbot_connected(*args):
+            '''
+            .. versionchanged:: X.X.X
+                Synchronize time between DropBot microseconds count and host
+                UTC time.
+            '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
+
             OUTPUT_ENABLE_PIN = 22
             # Chip may have been inserted before connecting, so `chip-inserted`
             # event may have been missed.
@@ -446,6 +455,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.emit('chip-removed')
             else:
                 self.emit('chip-inserted')
+
+            self.device_time_sync = {'host': dt.datetime.utcnow(),
+                                     'device_us':
+                                     self.control_board.microseconds()}
 
         self.connect('dropbot-connected', _on_dropbot_connected)
 
