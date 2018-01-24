@@ -1093,16 +1093,17 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         app_values = self.get_app_values()
         c_liquid = app_values['c_liquid']
 
-        label = 'Voltage: %.1f V, Capacitance: %.1f pF' % (voltage, 1e12 *
-                                                           capacitance)
+        label = 'Voltage: {}V, Capacitance: {}F'.format(*map(si.si_format,
+                                                             (voltage,
+                                                              capacitance)))
 
         # add normalized force to the label if we've calibrated the device
         if c_liquid > 0:
             # TODO: calculate force including filler media
-            label += (u'\nForce: %.1f \u03BCN/mm (c<sub>device</sub>='
-                      u'%.1f pF/mm<sup>2</sup>)' % (1e9 * 0.5 * c_liquid *
-                                                    voltage**2, 1e12 *
-                                                    c_liquid))
+            label += (u'\nForce: {}N/mm (c<sub>device</sub>='
+                      u'{}F/mm<sup>2</sup>)'
+                      .format(*map(si.si_format, 1e3 * 0.5 * c_liquid *
+                                   voltage ** 2, c_liquid)))
 
         # Schedule update of control board status label in main GTK thread.
         gobject.idle_add(app.main_window_controller.label_control_board_status
@@ -1145,8 +1146,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.control_board.set_state_of_channels(channel_states)
             c = self.control_board.measure_capacitance()
             _L(_I()).info("on_measure_%s_capacitance: "
-                          "%.1f pF/%.1f mm^2 = %.1f pF/mm^2" %
-                          (name, c * 1e12, a, c / a * 1e12))
+                          "{}F/%.1f mm^2 = {}F/mm^2",
+                          name, si.si_format(c), a, si.si_format(c / a))
             app_values = {}
             app_values['c_%s' % name] = c / a
             self.set_app_values(app_values)
@@ -1343,7 +1344,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # normalized capacitance exceeds the threshold
         if volume_threshold > 0 and a > 0 and c_liquid > 0:
             normalized_capacitance = c / a
-            info_msg += ', C/A=%.1f pF/mm^2' % (1e12 * normalized_capacitance)
+            info_msg += ', C/A=%sF/mm^2' % si.si_format(normalized_capacitance)
 
             # if the measured capacitance is not above the threshold
             if normalized_capacitance < volume_threshold * c_liquid:
