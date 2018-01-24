@@ -32,6 +32,8 @@ requirements:
     - pip-helpers
     - pytables
     - pyyaml
+    #: .. versionadded:: X.X.X
+    - si-prefix
     # .. versionchanged:: 0.16
     - wheeler.pygtkhelpers >=0.19
     - zmq-plugin
@@ -50,6 +52,8 @@ requirements:
     - pip-helpers
     - pytables
     - pyyaml
+    #: .. versionadded:: X.X.X
+    - si-prefix
     # .. versionchanged:: 0.16
     - wheeler.pygtkhelpers >=0.19
     - zmq-plugin

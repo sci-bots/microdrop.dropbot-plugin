@@ -19,6 +19,7 @@ along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 from functools import wraps
 import Queue
 import datetime as dt
+import gzip
 import inspect
 import json
 import logging
@@ -63,6 +64,7 @@ import json_tricks
 import numpy as np
 import pandas as pd
 import path_helpers as ph
+import si_prefix as si
 import tables
 import zmq
 
@@ -426,6 +428,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         #: .. versionadded:: X.X.X
         self.actuation_voltage = 0
+
+        #: .. versionadded:: X.X.X
+        self._step_capacitances = []
 
         #: .. versionadded:: X.X.X
         self.device_time_sync = {}
@@ -1188,6 +1193,40 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         self._calibrate_device_capacitance('filler')
 
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
+    def _apply_state(self):
+        options = self.get_step_options()
+
+        if self.dropbot_connected.is_set():
+            max_channels = self.control_board.number_of_channels
+            # All channels should default to off.
+            channel_states = np.zeros(max_channels, dtype=int)
+            # Set the state of any channels that have been set explicitly.
+            channel_states[self.channel_states.index
+                            .values.tolist()] = self.channel_states
+
+            emit_signal("set_frequency",
+                        options['frequency'],
+                        interface=IWaveformGenerator)
+            emit_signal("set_voltage", options['voltage'],
+                        interface=IWaveformGenerator)
+            if not self.control_board.hv_output_enabled:
+                # XXX Only set if necessary, since there is a ~200 ms delay.
+                self.control_board.hv_output_enabled = True
+
+            self.control_board.set_state_of_channels(channel_states)
+            if logging.getLogger().isEnabledFor(logging.DEBUG):
+                _L(_I()).debug('Actuate channels: %s',
+                               np.where(channel_states)[0])
+                _L(_I()).debug('DropBot state:')
+                map(_L(_I()).debug, str(self.control_board.state).splitlines())
+
+            # Connect to `capacitance-updated` signal to record capacitance
+            # values measured during the step.
+            (self.control_board.signals.signal('capacitance-updated')
+             .connect(self._step_capacitances.append, weak=False))
+            _L(_I()).info('connected capacitance updated signal callback')
+
     def on_step_run(self):
         """
         Handler called whenever a step is executed.
@@ -1209,31 +1248,15 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         _L(_I()).debug('[DropBotPlugin] on_step_run()')
         self._kill_running_step()
+
         app = get_app()
-        options = self.get_step_options()
 
-        if (self.control_board and (app.realtime_mode or app.running)):
-            max_channels = self.control_board.number_of_channels
-            # All channels should default to off.
-            channel_states = np.zeros(max_channels, dtype=int)
-            # Set the state of any channels that have been set explicitly.
-            channel_states[self.channel_states.index
-                           .values.tolist()] = self.channel_states
+        if app.realtime_mode or app.running:
+            self._apply_state()
 
-            emit_signal("set_frequency",
-                        options['frequency'],
-                        interface=IWaveformGenerator)
-            emit_signal("set_voltage", options['voltage'],
-                        interface=IWaveformGenerator)
-            if not self.control_board.hv_output_enabled:
-                self.control_board.hv_output_enabled = True
-
-            self.control_board.set_state_of_channels(channel_states)
-
-            # If the app is not running, we must be in realtime mode.
-            # Measure the voltage and capacitance and update the gui.
-            if not app.running:
-                self.measure_capacitance()
+        if app.realtime_mode and not app.running:
+            # Measure the voltage and capacitance and update the GUI.
+            self.measure_capacitance()
 
         # if a protocol is running, wait for the specified minimum duration
         if app.running:
@@ -1246,9 +1269,66 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         else:
             self.step_complete()
 
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
+    def log_capacitance_updates(self, capacitance_updates):
+        '''
+        .. versionadded:: X.X.X
+
+        Append the specified capacitance update messages to a GZip-compressed
+        CSV table in the current experiment log directory.
+
+        Parameters
+        ----------
+        capacitance_updates : list
+            List of ``"capacitance-updated"`` event messages.
+        '''
+        app = get_app()
+
+        # Append data to CSV file.
+        csv_output_path = self.data_dir().joinpath('data.csv.gz')
+        # Only include header if the file does not exist or is empty.
+        include_header = not (csv_output_path.isfile() and
+                              (csv_output_path.size > 0))
+
+        df = (pd.DataFrame(capacitance_updates).drop('event', axis=1)
+              .rename(columns={'new_value': 'capacitance'}))
+        # Compute UTC timestamp based on host time synced with DropBot
+        # microseconds count.
+        df.insert(0, 'timestamp_utc', self.device_time_sync['host'] +
+                  ((df['end'] - self.device_time_sync['device_us']) *
+                   1e-6).map(lambda x: dt.timedelta(seconds=x)))
+        df.insert(1, 'step', app.protocol.current_step_number + 1)
+        # XXX Must assign repeated list, since broadcast assigning of a list
+        # does not work.
+        channels = tuple(np.where(self.control_board
+                                  .state_of_channels)[0].tolist())
+        df.insert(2, 'channels', [channels] * df.shape[0])
+        df.insert(3, 'area', self.actuated_area)
+        duration = df.end - df.start
+        # Drop `start` and `end` columns since they have been encoded in the
+        # `timestamp_utc`, `n_samples`, and `sampling_rate_hz` columns.
+        df.drop(['start', 'end'], axis=1, inplace=True)
+        df['sampling_rate_hz'] = df['n_samples'] / duration * 1e6
+
+        # Determine precision required to represent minimum value with 3
+        # decimal places.
+        double_precision = -(si.split(df.capacitance.min())[1] - 3)
+
+        with gzip.open(csv_output_path, 'a', compresslevel=9) as output:
+            df.to_csv(output, index=False, header=include_header)
+
     def step_complete(self, return_value=None):
         app = get_app()
         if app.running or app.realtime_mode:
+            # Disconnect from `capacitance-updated` signal to stop recording
+            # capacitance values now that the step has finished.
+            (self.control_board.signals.signal('capacitance-updated')
+             .disconnect(self._step_capacitances.append))
+            if self._step_capacitances:
+                self.log_capacitance_updates(self._step_capacitances)
+                _L(_I()).info('logged %d capacitance readings.',
+                              len(self._step_capacitances))
+                self._step_capacitances = []
             emit_signal('on_step_complete', [self.name, return_value])
 
     def on_step_complete(self, plugin_name, return_value=None):
