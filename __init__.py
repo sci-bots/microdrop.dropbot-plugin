@@ -1382,22 +1382,20 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             df.to_csv(output, index=False, header=include_header)
 
     def complete_step(self, return_value=None):
+        self.timeout_id = None
         app = get_app()
         if app.running or app.realtime_mode:
-            # Disconnect from `capacitance-updated` signal to stop recording
-            # capacitance values now that the step has finished.
-            (self.control_board.signals.signal('capacitance-updated')
-             .disconnect(self._step_capacitances.append))
+            if self.dropbot_connected.is_set():
+                # Disconnect from `capacitance-updated` signal to stop
+                # recording capacitance values now that the step has finished.
+                (self.control_board.signals.signal('capacitance-updated')
+                 .disconnect(self._step_capacitances.append))
             if self._step_capacitances:
                 self.log_capacitance_updates(self._step_capacitances)
                 _L().info('logged %d capacitance readings.',
                           len(self._step_capacitances))
                 self._step_capacitances = []
             emit_signal('on_step_complete', [self.name, return_value])
-
-    def on_step_complete(self, plugin_name, return_value=None):
-        if plugin_name == self.name:
-            self.timeout_id = None
 
     def _kill_running_step(self):
         if self.timeout_id:
@@ -1408,54 +1406,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # Wait for capacitance threshold watching thread to stop.
         self.capacitance_watch_finished.wait()
 
-    def _callback_step_completed(self):
-        results = self.measure_capacitance()
-        c = results['capacitance']
-
-        app = get_app()
-
-        app_values = self.get_app_values()
-        c_liquid = app_values['c_liquid']
-
-        step_options = self.get_step_options()
-        volume_threshold = step_options['volume_threshold']
-        max_repeats = step_options['max_repeats']
-
-        a = self.actuated_area
-        return_value = None
-        info_msg = ('_callback_step_completed: attempt=%d' %
-                    app.protocol.current_step_attempt)
-
-        # if a volume threshold has been set for this step, check if the
-        # normalized capacitance exceeds the threshold
-        if volume_threshold > 0 and a > 0 and c_liquid > 0:
-            normalized_capacitance = c / a
-            info_msg += ', C/A=%sF/mm^2' % si.si_format(normalized_capacitance)
-
-            # if the measured capacitance is not above the threshold
-            if normalized_capacitance < volume_threshold * c_liquid:
-                # if we're at the max number of repeats, fail; otherwise,
-                # repeat the step
-                if app.protocol.current_step_attempt == max_repeats:
-                    return_value = 'Fail'
-                else:
-                    return_value = 'Repeat'
-
-        if return_value:
-            info_msg += '. %s' % return_value
-        else:
-            info_msg += '. OK'
-
-        _L(_I()).info(info_msg)
-        self.step_complete(return_value)
-        return False  # stop the timeout from refiring
-
     def on_protocol_run(self):
         """
         Handler called when a protocol starts running.
         """
         app = get_app()
-        if not self.control_board:
+        if not self.dropbot_connected.is_set():
             _L().warning("Warning: no control board connected.")
         elif (self.control_board.number_of_channels <=
               app.dmf_device.max_channel()):
