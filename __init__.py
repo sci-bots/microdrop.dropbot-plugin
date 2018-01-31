@@ -1187,37 +1187,34 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def _apply_state(self):
         options = self.get_step_options()
+        max_channels = self.control_board.number_of_channels
+        # All channels should default to off.
+        channel_states = np.zeros(max_channels, dtype=int)
+        # Set the state of any channels that have been set explicitly.
+        channel_states[self.channel_states.index
+                       .values.tolist()] = self.channel_states
 
-        if self.dropbot_connected.is_set():
-            max_channels = self.control_board.number_of_channels
-            # All channels should default to off.
-            channel_states = np.zeros(max_channels, dtype=int)
-            # Set the state of any channels that have been set explicitly.
-            channel_states[self.channel_states.index
-                            .values.tolist()] = self.channel_states
+        emit_signal("set_frequency",
+                    options['frequency'],
+                    interface=IWaveformGenerator)
+        emit_signal("set_voltage", options['voltage'],
+                    interface=IWaveformGenerator)
+        if not self.control_board.hv_output_enabled:
+            # XXX Only set if necessary, since there is a ~200 ms delay.
+            self.control_board.hv_output_enabled = True
 
-            emit_signal("set_frequency",
-                        options['frequency'],
-                        interface=IWaveformGenerator)
-            emit_signal("set_voltage", options['voltage'],
-                        interface=IWaveformGenerator)
-            if not self.control_board.hv_output_enabled:
-                # XXX Only set if necessary, since there is a ~200 ms delay.
-                self.control_board.hv_output_enabled = True
+        logger = _L()  # use logger with method context
+        self.control_board.set_state_of_channels(channel_states)
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logger.debug('Actuate channels: %s', np.where(channel_states)[0])
+            logger.debug('DropBot state:')
+            map(logger.debug, str(self.control_board.state).splitlines())
 
-            logger = _L()  # use logger with method context
-            self.control_board.set_state_of_channels(channel_states)
-            if logger.isEnabledFor(logging.DEBUG):
-                logger.debug('Actuate channels: %s',
-                             np.where(channel_states)[0])
-                logger.debug('DropBot state:')
-                map(logger.debug, str(self.control_board.state).splitlines())
-
-            # Connect to `capacitance-updated` signal to record capacitance
-            # values measured during the step.
-            (self.control_board.signals.signal('capacitance-updated')
-             .connect(self._step_capacitances.append, weak=False))
-            logger.info('connected capacitance updated signal callback')
+        # Connect to `capacitance-updated` signal to record capacitance
+        # values measured during the step.
+        (self.control_board.signals.signal('capacitance-updated')
+            .connect(self._step_capacitances.append, weak=False))
+        logger.info('connected capacitance updated signal callback')
 
     def on_step_run(self):
         """
