@@ -1257,7 +1257,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         if not app.running:
             # Protocol is not running so do not apply capacitance threshold or
             # duration.
-            self.step_complete()
+            self.complete_step()
         else:
             options = self.get_step_options()
             app_values = self.get_app_values()
@@ -1270,7 +1270,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             if not self.dropbot_connected.is_set():
                 # DropBot is not connected.  Delay for specified duration.
                 self.timeout_id = gobject.timeout_add(options['duration'],
-                                                      self.step_complete)
+                                                      self.complete_step)
             elif all(threshold_criteria):
                 # A volume threshold has been set for this step.
 
@@ -1303,7 +1303,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                                    .result['new_value'],
                                                    target_capacitance)))
                             self.capacitance_exceeded.clear()
-                            gtk_threadsafe(self.step_complete)()
+                            gtk_threadsafe(self.complete_step)()
                         elif self.step_cancelled.is_set():
                             # Step was cancelled.
                             _L().info('Step was cancelled.')
@@ -1316,7 +1316,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                   *map(si.si_format,
                                        (self.device_load_capacitance,
                                         target_capacitance, duration_s)))
-                        gtk_threadsafe(self.step_complete)('Fail')
+                        gtk_threadsafe(self.complete_step)('Fail')
                     # Signal that capacitance watch thread has completed.
                     self.capacitance_watch_finished.set()
                     _L().debug('thread finished: %s', thread.get_ident())
@@ -1331,7 +1331,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.control_board.update_state(target_capacitance=0)
                 _L().info('actuated area: %s mm^2', self.actuated_area)
                 self.timeout_id = gobject.timeout_add(options['duration'],
-                                                      self.step_complete)
+                                                      self.complete_step)
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def log_capacitance_updates(self, capacitance_updates):
@@ -1381,7 +1381,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         with gzip.open(csv_output_path, 'a', compresslevel=9) as output:
             df.to_csv(output, index=False, header=include_header)
 
-    def step_complete(self, return_value=None):
+    def complete_step(self, return_value=None):
         app = get_app()
         if app.running or app.realtime_mode:
             # Disconnect from `capacitance-updated` signal to stop recording
