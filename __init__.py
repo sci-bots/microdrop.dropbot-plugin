@@ -76,6 +76,12 @@ from .noconflict import classmaker
 __version__ = get_versions()['version']
 del get_versions
 
+
+# Reduce logging from `debounce` library.
+for _ in ("debounce.%s" % i for i in ('setTimeout', 'shouldInvoke',
+                                      'timerExpired')):
+    logging.getLogger(_).setLevel(logging.CRITICAL)
+
 # Prevent warning about potential future changes to Numpy scalar encoding
 # behaviour.
 json_tricks.NumpyEncoder.SHOW_SCALAR_WARNING = False
