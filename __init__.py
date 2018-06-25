@@ -1236,6 +1236,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def _apply_state(self):
+        '''
+        .. versionchanged:: X.X.X
+            Use :meth:`_on_step_capacitance_updated` callback to add current
+            list of actuated channels and associated actuated area to
+            capacitance update message.
+        '''
         options = self.get_step_options()
         max_channels = self.control_board.number_of_channels
         # All channels should default to off.
@@ -1263,7 +1269,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # Connect to `capacitance-updated` signal to record capacitance
         # values measured during the step.
         (self.control_board.signals.signal('capacitance-updated')
-            .connect(self._step_capacitances.append, weak=False))
+         .connect(self._on_step_capacitance_updated, weak=False))
         logger.info('connected capacitance updated signal callback')
 
     def on_step_run(self):
@@ -1431,6 +1437,22 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         with gzip.open(csv_output_path, 'a', compresslevel=9) as output:
             df.to_csv(output, index=False, header=include_header)
 
+    def _on_step_capacitance_updated(self, message):
+        '''
+        .. versionadded:: X.X.X
+
+
+        Callback for ``capacitance-updated`` DropBot device events (only called
+        when step is running).
+
+        Add current list of actuated channels and associated actuated electrode
+        area to capacitance update message and add message to list of updates
+        for the currently running step.
+        '''
+        message['actuated_channels'] = self.actuated_channels
+        message['actuated_area'] = self.actuated_area
+        self._step_capacitances.append(message)
+
     def complete_step(self, return_value=None):
         self.timeout_id = None
         app = get_app()
@@ -1439,7 +1461,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 # Disconnect from `capacitance-updated` signal to stop
                 # recording capacitance values now that the step has finished.
                 (self.control_board.signals.signal('capacitance-updated')
-                 .disconnect(self._step_capacitances.append))
+                 .disconnect(self._on_step_capacitance_updated))
             if self._step_capacitances:
                 self.log_capacitance_updates(self._step_capacitances)
                 _L().info('logged %d capacitance readings.',
