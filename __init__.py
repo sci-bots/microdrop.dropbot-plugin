@@ -458,6 +458,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             .. versionchanged:: X.X.X
                 Synchronize time between DropBot microseconds count and host
                 UTC time.
+
+                Update local actuation voltage with voltage sent in capacitance
+                update events.
             '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
@@ -475,6 +478,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # Set capacitance exceeded event whenever the
             # `'capacitance-exceeded'` signal is emitted from the DropBot.
             def _on_capacitance_exceeded(message):
+                if 'V_a' in message:
+                    self.actuation_voltage = message['V_a']
                 self.capacitance_exceeded.result = message
                 self.capacitance_exceeded.set()
             (self.control_board.signals.signal('capacitance-exceeded')
@@ -484,6 +489,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # Update cached device load capacitance each time the
             # `'capacitance-updated'` signal is emitted from the DropBot.
             def _on_capacitance_updated(message):
+                if 'V_a' in message:
+                    self.actuation_voltage = message['V_a']
                 self.device_load_capacitance = message['new_value']
                 self.on_device_capacitance_update(message['new_value'])
             (self.control_board.signals.signal('capacitance-updated')
