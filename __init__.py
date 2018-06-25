@@ -430,6 +430,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         #: .. versionadded:: 2.24
         self.device_time_sync = {}
 
+        #: .. versionadded:: X.X.X
+        self.actuated_channels = []
+
         #: .. versionadded:: 2.24
         self.step_cancelled = threading.Event()
         #: .. versionadded:: 2.24
@@ -461,6 +464,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
                 Update local actuation voltage with voltage sent in capacitance
                 update events.
+
+            .. versionchanged:: X.X.X
+                Update local list of actuated channels and associated actuated
+                area from ``channels-updated`` device events.
             '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
@@ -503,6 +510,31 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.device_time_sync = {'host': dt.datetime.utcnow(),
                                      'device_us':
                                      self.control_board.microseconds()}
+
+            def _on_channels_updated(message):
+                '''
+                Message keys:
+                 - ``"n"``: number of actuated channel
+                 - ``"actuated"``: list of actuated channel identifiers.
+                 - ``"start"``: ms counter before setting shift registers
+                 - ``"end"``: ms counter after setting shift registers
+                '''
+                self.actuated_channels = message['actuated']
+                if self.actuated_channels:
+                    app = get_app()
+                    actuated_electrodes = \
+                        app.dmf_device.actuated_electrodes(self
+                                                           .actuated_channels)
+                    actuated_areas = (app.dmf_device
+                                      .electrode_areas.ix[actuated_electrodes
+                                                          .values])
+                    self.actuated_area = actuated_areas.sum()
+                else:
+                    self.actuated_area = 0
+
+            (self.control_board.signals.signal('channels-updated')
+             .connect(_on_channels_updated, weak=False))
+            _L().info('connected channels updated signal callback')
 
         self.connect('dropbot-connected', _on_dropbot_connected)
 
