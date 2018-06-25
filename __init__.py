@@ -36,7 +36,7 @@ from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
                                                 FigureCanvas)
 from matplotlib.figure import Figure
-from logging_helpers import _L  #: .. versionadded:: X.X.X
+from logging_helpers import _L  #: .. versionadded:: 2.24
 from microdrop.app_context import get_app, get_hub_uri
 from microdrop.gui.protocol_grid_controller import ProtocolGridController
 from microdrop.plugin_helpers import (StepOptionsController, AppDataController)
@@ -272,7 +272,7 @@ def require_connection(log_level='error'):
     function
         Decorator to require DropBot connection.
 
-    .. versionchanged:: X.X.X
+    .. versionchanged:: 2.24
         Convert to decorator factory to add optional log-level customization.
     '''
     def _require_connection(func):
@@ -418,26 +418,26 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.diagnostics_results_dir = '.dropbot-diagnostics'
         self.actuated_area = 0
 
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.24
         self.device_load_capacitance = 0
 
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.24
         self.actuation_voltage = 0
 
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.24
         self._step_capacitances = []
 
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.24
         self.device_time_sync = {}
 
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.24
         self.step_cancelled = threading.Event()
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.24
         self.capacitance_watch_thread = None
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.24
         self.capacitance_watch_finished = threading.Event()
         self.capacitance_watch_finished.set()
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.24
         self.capacitance_exceeded = threading.Event()
 
         self.chip_watch_thread = None
@@ -455,7 +455,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         def _on_dropbot_connected(*args):
             '''
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.24
                 Synchronize time between DropBot microseconds count and host
                 UTC time.
 
@@ -1098,7 +1098,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Use :func:`numpy.where` instead of :func:`mlab.find` since
             :mod:`numpy` is already a dependency.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.24
             Change method signature to accept capacitance as only argument.
 
             Deprecate CSV logging on capacitance update.  Multiple capacitance
@@ -1248,7 +1248,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             actuation in real-time mode, or b) after step duration is complete
             when protocol is running.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.24
             Use a thread and corresponding :class:`threading.Event` instances
             to watch for the threshold capacitance (if set) to be reached.  If
             the threshold is not met by the specified duration of the step,
@@ -1349,7 +1349,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def log_capacitance_updates(self, capacitance_updates):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.24
 
         Append the specified capacitance update messages to a GZip-compressed
         CSV table in the current experiment log directory.
