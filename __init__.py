@@ -325,7 +325,7 @@ def require_test_board(func):
 
     .. versionchanged:: 0.16
 
-    .. versionchanged:: X.X.X
+    .. versionchanged:: 2.25
         Add clickable hyperlink to DropBot Test Board documentation.
     '''
     @wraps(func)
@@ -451,7 +451,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         #: .. versionadded:: 2.24
         self.device_time_sync = {}
 
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.25
         self.actuated_channels = []
 
         #: .. versionadded:: 2.24
@@ -486,7 +486,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 Update local actuation voltage with voltage sent in capacitance
                 update events.
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.25
                 Update local list of actuated channels and associated actuated
                 area from ``channels-updated`` device events.
             '''
@@ -796,7 +796,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def cleanup_plugin(self):
         '''
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.25
             Kill any currently running step.
         '''
         self._kill_running_step()
@@ -1259,7 +1259,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def _apply_state(self):
         '''
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.25
             Use :meth:`_on_step_capacitance_updated` callback to add current
             list of actuated channels and associated actuated area to
             capacitance update message.
@@ -1425,7 +1425,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             List of ``"capacitance-updated"`` event messages.
 
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.25
             Use actuated channels lists and actuated areas from capacitance
             updates.
         '''
@@ -1460,7 +1460,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def _on_step_capacitance_updated(self, message):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.25
 
 
         Callback for ``capacitance-updated`` DropBot device events (only called
@@ -1492,7 +1492,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def _kill_running_step(self):
         '''
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.25
             Stop recording capacitance updates.
         '''
         if self.timeout_id:
