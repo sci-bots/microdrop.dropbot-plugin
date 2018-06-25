@@ -773,6 +773,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.on_step_run()
 
     def cleanup_plugin(self):
+        '''
+        .. versionchanged:: X.X.X
+            Kill any currently running step.
+        '''
+        self._kill_running_step()
         if self.plugin_timeout_id is not None:
             gobject.source_remove(self.plugin_timeout_id)
         if self.plugin is not None:
@@ -1443,6 +1448,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             emit_signal('on_step_complete', [self.name, return_value])
 
     def _kill_running_step(self):
+        '''
+        .. versionchanged:: X.X.X
+            Stop recording capacitance updates.
+        '''
         if self.timeout_id:
             _L().debug('remove timeout_id=%d', self.timeout_id)
             gobject.source_remove(self.timeout_id)
@@ -1450,6 +1459,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.step_cancelled.set()
         # Wait for capacitance threshold watching thread to stop.
         self.capacitance_watch_finished.wait()
+        if self.dropbot_connected.is_set():
+            # Stop recording capacitance updates.
+            (self.control_board.signals.signal('capacitance-updated')
+             .disconnect(self._step_capacitances.append))
 
     def on_protocol_run(self):
         """
