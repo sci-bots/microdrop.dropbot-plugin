@@ -19,9 +19,12 @@ along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 from functools import wraps
 import Queue
 import datetime as dt
+import gzip
+import inspect
 import json
 import logging
 import re
+import thread
 import threading
 import time
 import types
@@ -33,6 +36,7 @@ from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
                                                 FigureCanvas)
 from matplotlib.figure import Figure
+from logging_helpers import _L  #: .. versionadded:: 2.24
 from microdrop.app_context import get_app, get_hub_uri
 from microdrop.gui.protocol_grid_controller import ProtocolGridController
 from microdrop.plugin_helpers import (StepOptionsController, AppDataController)
@@ -60,8 +64,10 @@ import gtk
 # [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
 import json_tricks
 import numpy as np
+import or_event
 import pandas as pd
 import path_helpers as ph
+import si_prefix as si
 import tables
 import zmq
 
@@ -70,12 +76,15 @@ from .noconflict import classmaker
 __version__ = get_versions()['version']
 del get_versions
 
+
+# Reduce logging from `debounce` library.
+for _ in ("debounce.%s" % i for i in ('setTimeout', 'shouldInvoke',
+                                      'timerExpired')):
+    logging.getLogger(_).setLevel(logging.CRITICAL)
+
 # Prevent warning about potential future changes to Numpy scalar encoding
 # behaviour.
 json_tricks.NumpyEncoder.SHOW_SCALAR_WARNING = False
-
-logger = logging.getLogger(__name__)
-
 
 # Ignore natural name warnings from PyTables [1].
 #
@@ -136,8 +145,8 @@ class DmfZmqPlugin(ZmqPlugin):
         except zmq.Again:
             pass
         except Exception:
-            logger.error('Error processing message from subscription '
-                         'socket.', exc_info=True)
+            _L().error('Error processing message from subscription socket.',
+                       exc_info=True)
         return True
 
 
@@ -249,17 +258,34 @@ def results_dialog(name, results, axis_count=1, parent=None):
     return dialog
 
 
-def require_connection(func):
+def require_connection(log_level='error'):
     '''
-    Decorator to require DropBot connection.
+    Decorator factory to require DropBot connection.
+
+    Parameters
+    ----------
+    log_level : str
+        Level to log message to if DropBot is not connect.
+
+    Returns
+    -------
+    function
+        Decorator to require DropBot connection.
+
+    .. versionchanged:: 2.24
+        Convert to decorator factory to add optional log-level customization.
     '''
-    @wraps(func)
-    def _wrapped(self, *args, **kwargs):
-        if not self.dropbot_connected.is_set():
-            logger.error('DropBot is not connected.')
-        else:
-            return func(self, *args, **kwargs)
-    return _wrapped
+    def _require_connection(func):
+        @wraps(func)
+        def _wrapped(self, *args, **kwargs):
+            if not self.dropbot_connected.is_set():
+                logger = _L()
+                log_func = getattr(logger, log_level)
+                log_func('DropBot is not connected.')
+            else:
+                return func(self, *args, **kwargs)
+        return _wrapped
+    return _require_connection
 
 
 def error_ignore(on_error=None):
@@ -392,6 +418,28 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.diagnostics_results_dir = '.dropbot-diagnostics'
         self.actuated_area = 0
 
+        #: .. versionadded:: 2.24
+        self.device_load_capacitance = 0
+
+        #: .. versionadded:: 2.24
+        self.actuation_voltage = 0
+
+        #: .. versionadded:: 2.24
+        self._step_capacitances = []
+
+        #: .. versionadded:: 2.24
+        self.device_time_sync = {}
+
+        #: .. versionadded:: 2.24
+        self.step_cancelled = threading.Event()
+        #: .. versionadded:: 2.24
+        self.capacitance_watch_thread = None
+        #: .. versionadded:: 2.24
+        self.capacitance_watch_finished = threading.Event()
+        self.capacitance_watch_finished.set()
+        #: .. versionadded:: 2.24
+        self.capacitance_exceeded = threading.Event()
+
         self.chip_watch_thread = None
         self._chip_inserted = threading.Event()
         self._dropbot_connected = threading.Event()
@@ -406,8 +454,17 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                      self.update_connection_status())
 
         def _on_dropbot_connected(*args):
+            '''
+            .. versionchanged:: 2.24
+                Synchronize time between DropBot microseconds count and host
+                UTC time.
+
+                Update local actuation voltage with voltage sent in capacitance
+                update events.
+            '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
+
             OUTPUT_ENABLE_PIN = 22
             # Chip may have been inserted before connecting, so `chip-inserted`
             # event may have been missed.
@@ -418,9 +475,41 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             else:
                 self.emit('chip-inserted')
 
+            # Set capacitance exceeded event whenever the
+            # `'capacitance-exceeded'` signal is emitted from the DropBot.
+            def _on_capacitance_exceeded(message):
+                if 'V_a' in message:
+                    self.actuation_voltage = message['V_a']
+                self.capacitance_exceeded.result = message
+                self.capacitance_exceeded.set()
+            (self.control_board.signals.signal('capacitance-exceeded')
+             .connect(_on_capacitance_exceeded, weak=False))
+            _L().info('connected capacitance exceeded signal callback')
+
+            # Update cached device load capacitance each time the
+            # `'capacitance-updated'` signal is emitted from the DropBot.
+            def _on_capacitance_updated(message):
+                if 'V_a' in message:
+                    self.actuation_voltage = message['V_a']
+                self.device_load_capacitance = message['new_value']
+                self.on_device_capacitance_update(message['new_value'])
+            (self.control_board.signals.signal('capacitance-updated')
+             .connect(_on_capacitance_updated, weak=False))
+            # Request for the DropBot to measure the device load capacitance
+            # every 100 ms.
+            self.control_board.update_state(capacitance_update_interval_ms=100)
+            _L().info('connected capacitance updated signal callback')
+
+            self.device_time_sync = {'host': dt.datetime.utcnow(),
+                                     'device_us':
+                                     self.control_board.microseconds()}
+
         self.connect('dropbot-connected', _on_dropbot_connected)
 
         def _on_dropbot_disconnected(*args):
+            # Clear capacitance exceeded event since DropBot is not connected.
+            self.capacitance_exceeded.clear()
+            # Clear event indicating DropBot has been disconnected.
             self.dropbot_connected.clear()
             self.emit('chip-removed')
 
@@ -448,9 +537,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     @gtk_threadsafe  # Execute in GTK main thread
     @error_ignore(lambda exception, func, self, test_name, *args:
-                  logger.error('Error executing: "%s"', test_name,
-                               exc_info=True))
-    @require_connection  # Display error dialog if DropBot is not connected.
+                  _L().error('Error executing: "%s"', test_name,
+                             exc_info=True))
+    @require_connection()  # Display error dialog if DropBot is not connected.
     def execute_test(self, test_name, axis_count=1):
         '''
         Run single DropBot on-board self-diagnostic test.
@@ -465,7 +554,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         db.hardware_test.log_results(results, self.diagnostics_results_dir)
         format_func = getattr(db.self_test, 'format_%s_results' % test_name)
         message = format_func(results[test_name])
-        map(logger.info, map(unicode.rstrip, unicode(message).splitlines()))
+        map(_L().info, map(unicode.rstrip, unicode(message).splitlines()))
 
         app = get_app()
         parent = app.main_window_controller.view
@@ -476,9 +565,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     @gtk_threadsafe  # Execute in GTK main thread
     @error_ignore(lambda *args:
-                  logger.error('Error executing DropBot self tests.',
-                               exc_info=True))
-    @require_connection  # Display error dialog if DropBot is not connected.
+                  _L().error('Error executing DropBot self tests.',
+                             exc_info=True))
+    @require_connection()  # Display error dialog if DropBot is not connected.
     @require_test_board  # Prompt user to insert DropBot test board
     def run_all_tests(self):
         '''
@@ -597,10 +686,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                                    optional=True),
             Boolean.named('Auto-run diagnostic tests').using(default=True,
                                                              optional=True),
-            #: .. versionadded: 0.18
+            #: .. versionadded:: 0.18
             Float.named('c_liquid').using(default=0, optional=True,
                                           properties={'show_in_gui': False}),
-            #: .. versionadded: 0.18
+            #: .. versionadded:: 0.18
             Float.named('c_filler').using(default=0, optional=True,
                                           properties={'show_in_gui': False}))
 
@@ -623,20 +712,20 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           check_frequency]),
-                       #: .. versionadded: 0.18
+                       #: .. versionadded:: 0.18
                        Float.named('volume_threshold')
                        .using(default=0,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
                                           ValueAtMost(maximum=1.0)]),
-                       #: .. versionadded: 0.18
+                       #: .. versionadded:: 0.18
                        Integer.named('max_repeats')
                        .using(default=3,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0)]))
 
     def update_channel_states(self, channel_states):
-        logging.info('update_channel_states')
+        _L().info('update_channel_states')
         # Update locally cached channel states with new modified states.
         try:
             self.channel_states = channel_states.combine_first(self
@@ -647,8 +736,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             logging.info('', exc_info=True)
         else:
             app = get_app()
-            connected = self.control_board is not None
-            if connected and (app.realtime_mode or app.running):
+            if self.dropbot_connected.is_set() and (app.realtime_mode or
+                                                    app.running):
                 self.on_step_run()
 
     def cleanup_plugin(self):
@@ -656,7 +745,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             gobject.source_remove(self.plugin_timeout_id)
         if self.plugin is not None:
             self.plugin = None
-        if self.control_board is not None:
+        if self.dropbot_connected.is_set():
             self.control_board.hv_output_enabled = False
             self.control_board.terminate()
             self.control_board = None
@@ -788,9 +877,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         elif plugin_name == app.name:
             # Turn off all electrodes if we're not in realtime mode and not
             # running a protocol.
-            if self.control_board and (not app.realtime_mode and
-                                       not app.running):
-                logger.info('Turning off all electrodes.')
+            if self.dropbot_connected.is_set() and (not app.realtime_mode and
+                                                    not app.running):
+                _L().info('Turning off all electrodes.')
                 self.control_board.hv_output_enabled = False
 
     def connect_dropbot(self):
@@ -877,7 +966,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 _attempt_connect(port=port,
                                  ignore=[bnr.proxy.MultipleDevicesFound])
             except Exception as exception:
-                gobject.idle_add(logger.error, str(exception))
+                gobject.idle_add(_L().error, str(exception))
 
         @gtk_threadsafe
         def _offer_to_flash(message):
@@ -905,8 +994,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     break
             else:
                 # User answered yes to all questions.
-                logger.debug('Upload DropBot firmware version %s',
-                             db.__version__)
+                _L().debug('Upload DropBot firmware version %s',
+                           db.__version__)
                 db.bin.upload.upload()
                 time.sleep(0.5)
                 _attempt_connect()
@@ -915,7 +1004,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def data_dir(self):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         app = get_app()
         data_dir = app.experiment_log.get_log_path().joinpath(self.name)
@@ -983,94 +1072,79 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 .set_text(self.connection_status)
         _update_ui_connected_status()
 
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def measure_capacitance(self):
         '''
         Measure the capacitance of all actuated electrodes on the device
         and send an 'on_device_capacitance_update' signal to update to
         any listeners.
 
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         c = self.control_board.measure_capacitance()
         v = self.control_board.measure_voltage()
-        results = {'capacitance': c,
-                   'voltage': v}
         # send a signal to update the gui
-        emit_signal('on_device_capacitance_update', results)
+        emit_signal('on_device_capacitance_update', c)
         return dict(capacitance=c, voltage=v)
 
-    def on_device_capacitance_update(self, results):
+    def on_device_capacitance_update(self, capacitance):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
 
-        .. versionchanged: 0.19
+        .. versionchanged:: 0.19
             Simplify control board status label update.
 
-        .. versionchanged: 0.22
+        .. versionchanged:: 0.22
             Use :func:`numpy.where` instead of :func:`mlab.find` since
             :mod:`numpy` is already a dependency.
+
+        .. versionchanged:: 2.24
+            Change method signature to accept capacitance as only argument.
+
+            Deprecate CSV logging on capacitance update.  Multiple capacitance
+            measurements are instead logged at the end of each step to a
+            GZip-compressed CSV file.
+
+        Parameters
+        ----------
+        capacitance : float
+            Device load capacitance value.
         '''
-        area = self.actuated_area
-        voltage = results['voltage']
-        capacitance = results['capacitance']
+        # Use cached actuation voltage measurement taken ~100 ms after voltage
+        # was set.
+        voltage = self.actuation_voltage
 
         app = get_app()
         app_values = self.get_app_values()
         c_liquid = app_values['c_liquid']
 
-        label = 'Voltage: %.1f V, Capacitance: %.1f pF' % (voltage, 1e12 *
-                                                           capacitance)
+        label = 'Voltage: {}V, Capacitance: {}F'.format(*map(si.si_format,
+                                                             (voltage,
+                                                              capacitance)))
 
         # add normalized force to the label if we've calibrated the device
         if c_liquid > 0:
             # TODO: calculate force including filler media
-            label += (u'\nForce: %.1f \u03BCN/mm (c<sub>device</sub>='
-                      u'%.1f pF/mm<sup>2</sup>)' % (1e9 * 0.5 * c_liquid *
-                                                    voltage**2, 1e12 *
-                                                    c_liquid))
+            label += (u'\nForce: {}N/mm (c<sub>device</sub>='
+                      u'{}F/mm<sup>2</sup>)'
+                      .format(*map(si.si_format, (1e3 * 0.5 * c_liquid *
+                                                  voltage ** 2, c_liquid))))
 
         # Schedule update of control board status label in main GTK thread.
         gobject.idle_add(app.main_window_controller.label_control_board_status
-                         .set_text, ', '.join([self.connection_status, label]))
-
-        options = self.get_step_options()
-        logger.info('on_device_capacitance_update():')
-        logger.info('\tset_voltage=%.1f, measured_voltage=%.1f, '
-                    'error=%.1f%%', options['voltage'], voltage,
-                    100 * (voltage - options['voltage']) / options['voltage'])
-
-        # TODO: check that the voltage is within tolerance
-
-        # Append data to CSV file.
-        csv_output_path = self.data_dir().joinpath('data.csv')
-        # Only include header if the file does not exist or is empty.
-        include_header = not (csv_output_path.isfile() and
-                              (csv_output_path.size > 0))
-
-        df = pd.DataFrame(dict(
-            utc_timestamp=[dt.datetime.utcnow()],
-            area=[area],
-            step=[app.protocol.current_step_number + 1],
-            attempt=[app.protocol.current_step_attempt],
-            voltage=[voltage],
-            capacitance=[capacitance],
-            channels=[np.where(self.control_board
-                               .state_of_channels)[0].tolist()]))
-
-        with csv_output_path.open('a') as output:
-            df.to_csv(output, index=False,
-                      header=include_header)
+                         .set_markup, ', '.join([self.connection_status,
+                                                 label]))
 
     def _calibrate_device_capacitance(self, name):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         a = self.actuated_area
-        if self.control_board is None:
-            logger.error('DropBot is not connected.')
+        if not self.dropbot_connected.is_set():
+            _L().error('DropBot is not connected.')
         elif a == 0:
-            logger.error('At least one electrode must be actuated to perform '
-                         'calibration.')
+            _L().error('At least one electrode must be actuated to perform '
+                       'calibration.')
         else:
             max_channels = self.control_board.number_of_channels
             # All channels should default to off.
@@ -1078,6 +1152,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # Set the state of any channels that have been set explicitly.
             channel_states[self.channel_states.index
                            .values.tolist()] = self.channel_states
+
+            # enable high voltage
+            if not self.control_board.hv_output_enabled:
+                # XXX Only set if necessary, since there is a ~200 ms delay.
+                self.control_board.hv_output_enabled = True
 
             # set the voltage and frequency specified for the current step
             options = self.get_step_options()
@@ -1087,25 +1166,17 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             emit_signal("set_voltage", options['voltage'],
                         interface=IWaveformGenerator)
 
-            # enable high voltage
-            if not self.control_board.hv_output_enabled:
-                self.control_board.hv_output_enabled = True
-
             # perform the capacitance measurement
             self.control_board.set_state_of_channels(channel_states)
             c = self.control_board.measure_capacitance()
-            logger.info("on_measure_%s_capacitance: "
-                        "%.1f pF/%.1f mm^2 = %.1f pF/mm^2" % (name, c * 1e12,
-                                                              a, c / a * 1e12))
+            _L().info("on_measure_%s_capacitance: {}F/%.1f mm^2 = {}F/mm^2",
+                      name, si.si_format(c), a, si.si_format(c / a))
             app_values = {}
             app_values['c_%s' % name] = c / a
             self.set_app_values(app_values)
 
-            v = self.control_board.measure_voltage()
-            results = {'capacitance': c,
-                       'voltage': v}
             # send a signal to update the gui
-            emit_signal('on_device_capacitance_update', results)
+            emit_signal('on_device_capacitance_update', c)
 
             # Turn off all electrodes and disable high voltage if we're
             # not in realtime mode.
@@ -1116,15 +1187,47 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def on_measure_liquid_capacitance(self):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         self._calibrate_device_capacitance('liquid')
 
     def on_measure_filler_capacitance(self):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         self._calibrate_device_capacitance('filler')
+
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
+    def _apply_state(self):
+        options = self.get_step_options()
+        max_channels = self.control_board.number_of_channels
+        # All channels should default to off.
+        channel_states = np.zeros(max_channels, dtype=int)
+        # Set the state of any channels that have been set explicitly.
+        channel_states[self.channel_states.index
+                       .values.tolist()] = self.channel_states
+
+        emit_signal("set_frequency",
+                    options['frequency'],
+                    interface=IWaveformGenerator)
+        emit_signal("set_voltage", options['voltage'],
+                    interface=IWaveformGenerator)
+        if not self.control_board.hv_output_enabled:
+            # XXX Only set if necessary, since there is a ~200 ms delay.
+            self.control_board.hv_output_enabled = True
+
+        logger = _L()  # use logger with method context
+        self.control_board.set_state_of_channels(channel_states)
+        if logging.getLogger().isEnabledFor(logging.DEBUG):
+            logger.debug('Actuate channels: %s', np.where(channel_states)[0])
+            logger.debug('DropBot state:')
+            map(logger.debug, str(self.control_board.state).splitlines())
+
+        # Connect to `capacitance-updated` signal to record capacitance
+        # values measured during the step.
+        (self.control_board.signals.signal('capacitance-updated')
+            .connect(self._step_capacitances.append, weak=False))
+        logger.info('connected capacitance updated signal callback')
 
     def on_step_run(self):
         """
@@ -1144,114 +1247,189 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Instead, status is updated when capacitance is measured a) after
             actuation in real-time mode, or b) after step duration is complete
             when protocol is running.
+
+        .. versionchanged:: 2.24
+            Use a thread and corresponding :class:`threading.Event` instances
+            to watch for the threshold capacitance (if set) to be reached.  If
+            the threshold is not met by the specified duration of the step,
+            time out and stop the protocol.
         """
-        logger.debug('[DropBotPlugin] on_step_run()')
         self._kill_running_step()
+
+        # Clear step cancelled signal.
+        self.step_cancelled.clear()
         app = get_app()
-        options = self.get_step_options()
 
-        if (self.control_board and (app.realtime_mode or app.running)):
-            max_channels = self.control_board.number_of_channels
-            # All channels should default to off.
-            channel_states = np.zeros(max_channels, dtype=int)
-            # Set the state of any channels that have been set explicitly.
-            channel_states[self.channel_states.index
-                           .values.tolist()] = self.channel_states
+        if app.realtime_mode or app.running:
+            self._apply_state()
 
-            emit_signal("set_frequency",
-                        options['frequency'],
-                        interface=IWaveformGenerator)
-            emit_signal("set_voltage", options['voltage'],
-                        interface=IWaveformGenerator)
-            if not self.control_board.hv_output_enabled:
-                self.control_board.hv_output_enabled = True
+        if app.realtime_mode and not app.running:
+            # Measure the voltage and capacitance and update the GUI.
+            self.measure_capacitance()
 
-            self.control_board.set_state_of_channels(channel_states)
-
-            # If the app is not running, we must be in realtime mode.
-            # Measure the voltage and capacitance and update the gui.
-            if not app.running:
-                self.measure_capacitance()
-
-        # if a protocol is running, wait for the specified minimum duration
-        if app.running:
-            logger.debug('[DropBotPlugin] on_step_run: '
-                         'timeout_add(%d, _callback_step_completed)' %
-                         options['duration'])
-            self.timeout_id = gobject.timeout_add(
-                options['duration'], self._callback_step_completed)
-            return
+        if not app.running:
+            # Protocol is not running so do not apply capacitance threshold or
+            # duration.
+            self.complete_step()
         else:
-            self.step_complete()
+            options = self.get_step_options()
+            app_values = self.get_app_values()
 
-    def step_complete(self, return_value=None):
+            # Criteria that must be met to set target capacitance.
+            threshold_criteria = [options['volume_threshold'] > 0,
+                                  self.actuated_area > 0,
+                                  app_values['c_liquid'] > 0]
+
+            if not self.dropbot_connected.is_set():
+                # DropBot is not connected.  Delay for specified duration.
+                self.timeout_id = gobject.timeout_add(options['duration'],
+                                                      self.complete_step)
+            elif all(threshold_criteria):
+                # A volume threshold has been set for this step.
+
+                # Calculate target capacitance based on actuated area.
+                #
+                # Note: `app_values['c_liquid']` represents a *specific
+                # capacitance*, i.e., has units of $F/mm^2$.
+                target_capacitance = (options['volume_threshold'] *
+                                      self.actuated_area *
+                                      app_values['c_liquid'])
+                _L().info('target capacitance: %sF (actuated area: %s '
+                          'mm^2)', si.si_format(target_capacitance),
+                          self.actuated_area)
+                self.control_board.update_state(target_capacitance=
+                                                target_capacitance)
+
+                def _wait_for_target_capacitance():
+                    _L().debug('thread started: %s', thread.get_ident())
+                    self.capacitance_watch_finished.clear()
+                    event = or_event.OrEvent(self.step_cancelled,
+                                             self.capacitance_exceeded)
+                    duration_s = options['duration'] * 1e-3
+                    if event.wait(duration_s):
+                        if self.capacitance_exceeded.is_set():
+                            # Step was completed successfully within specified
+                            # duration.
+                            _L().info('Target capacitance was reached: %sF > '
+                                      '%sF', *map(si.si_format,
+                                                  (self.capacitance_exceeded
+                                                   .result['new_value'],
+                                                   target_capacitance)))
+                            self.capacitance_exceeded.clear()
+                            gtk_threadsafe(self.complete_step)()
+                        elif self.step_cancelled.is_set():
+                            # Step was cancelled.
+                            _L().info('Step was cancelled.')
+                    else:
+                        # Timed out waiting for capacitance.
+                        # XXX Include the value of the capacitance that *was*
+                        # reached in the log message.
+                        _L().warn('Timed out.  Capacitance %sF did not reach '
+                                  'target of %sF after %ss.',
+                                  *map(si.si_format,
+                                       (self.device_load_capacitance,
+                                        target_capacitance, duration_s)))
+                        gtk_threadsafe(self.complete_step)('Fail')
+                    # Signal that capacitance watch thread has completed.
+                    self.capacitance_watch_finished.set()
+                    _L().debug('thread finished: %s', thread.get_ident())
+
+                # Start thread to wait for target capacitance to be met.
+                self.capacitance_watch_thread = \
+                    threading.Thread(target=_wait_for_target_capacitance)
+                # Stop when main thread exits.
+                self.capacitance_watch_thread.daemon = True
+                self.capacitance_watch_thread.start()
+            else:
+                self.control_board.update_state(target_capacitance=0)
+                _L().info('actuated area: %s mm^2', self.actuated_area)
+                self.timeout_id = gobject.timeout_add(options['duration'],
+                                                      self.complete_step)
+
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
+    def log_capacitance_updates(self, capacitance_updates):
+        '''
+        .. versionadded:: 2.24
+
+        Append the specified capacitance update messages to a GZip-compressed
+        CSV table in the current experiment log directory.
+
+        Parameters
+        ----------
+        capacitance_updates : list
+            List of ``"capacitance-updated"`` event messages.
+        '''
+        app = get_app()
+
+        # Append data to CSV file.
+        csv_output_path = self.data_dir().joinpath('data.csv.gz')
+        # Only include header if the file does not exist or is empty.
+        include_header = not (csv_output_path.isfile() and
+                              (csv_output_path.size > 0))
+
+        df = (pd.DataFrame(capacitance_updates).drop('event', axis=1)
+              .rename(columns={'new_value': 'capacitance'}))
+        # Compute UTC timestamp based on host time synced with DropBot
+        # microseconds count.
+        df.insert(0, 'timestamp_utc', self.device_time_sync['host'] +
+                  ((df['end'] - self.device_time_sync['device_us']) *
+                   1e-6).map(lambda x: dt.timedelta(seconds=x)))
+        df.insert(1, 'step', app.protocol.current_step_number + 1)
+        # XXX Must assign repeated list, since broadcast assigning of a list
+        # does not work.
+        channels = tuple(np.where(self.control_board
+                                  .state_of_channels)[0].tolist())
+        df.insert(2, 'channels', [channels] * df.shape[0])
+        df.insert(3, 'area', self.actuated_area)
+        duration = df.end - df.start
+        # Drop `start` and `end` columns since they have been encoded in the
+        # `timestamp_utc`, `n_samples`, and `sampling_rate_hz` columns.
+        df.drop(['start', 'end'], axis=1, inplace=True)
+        df['sampling_rate_hz'] = df['n_samples'] / duration * 1e6
+
+        # Determine precision required to represent minimum value with 3
+        # decimal places.
+        double_precision = -(si.split(df.capacitance.min())[1] - 3)
+
+        with gzip.open(csv_output_path, 'a', compresslevel=9) as output:
+            df.to_csv(output, index=False, header=include_header)
+
+    def complete_step(self, return_value=None):
+        self.timeout_id = None
         app = get_app()
         if app.running or app.realtime_mode:
+            if self.dropbot_connected.is_set():
+                # Disconnect from `capacitance-updated` signal to stop
+                # recording capacitance values now that the step has finished.
+                (self.control_board.signals.signal('capacitance-updated')
+                 .disconnect(self._step_capacitances.append))
+            if self._step_capacitances:
+                self.log_capacitance_updates(self._step_capacitances)
+                _L().info('logged %d capacitance readings.',
+                          len(self._step_capacitances))
+                self._step_capacitances = []
             emit_signal('on_step_complete', [self.name, return_value])
-
-    def on_step_complete(self, plugin_name, return_value=None):
-        if plugin_name == self.name:
-            self.timeout_id = None
 
     def _kill_running_step(self):
         if self.timeout_id:
-            logger.debug('[DropBotPlugin] _kill_running_step: removing'
-                         'timeout_id=%d' % self.timeout_id)
+            _L().debug('remove timeout_id=%d', self.timeout_id)
             gobject.source_remove(self.timeout_id)
-
-    def _callback_step_completed(self):
-        results = self.measure_capacitance()
-        c = results['capacitance']
-
-        app = get_app()
-
-        app_values = self.get_app_values()
-        c_liquid = app_values['c_liquid']
-
-        step_options = self.get_step_options()
-        volume_threshold = step_options['volume_threshold']
-        max_repeats = step_options['max_repeats']
-
-        a = self.actuated_area
-        return_value = None
-        info_msg = ('_callback_step_completed: attempt=%d' %
-                    app.protocol.current_step_attempt)
-
-        # if a volume threshold has been set for this step, check if the
-        # normalized capacitance exceeds the threshold
-        if volume_threshold > 0 and a > 0 and c_liquid > 0:
-            normalized_capacitance = c / a
-            info_msg += ', C/A=%.1f pF/mm^2' % (1e12 * normalized_capacitance)
-
-            # if the measured capacitance is not above the threshold
-            if normalized_capacitance < volume_threshold * c_liquid:
-                # if we're at the max number of repeats, fail; otherwise,
-                # repeat the step
-                if app.protocol.current_step_attempt == max_repeats:
-                    return_value = 'Fail'
-                else:
-                    return_value = 'Repeat'
-
-        if return_value:
-            info_msg += '. %s' % return_value
-        else:
-            info_msg += '. OK'
-
-        logger.info(info_msg)
-        self.step_complete(return_value)
-        return False  # stop the timeout from refiring
+        # Signal that step has been cancelled.
+        self.step_cancelled.set()
+        # Wait for capacitance threshold watching thread to stop.
+        self.capacitance_watch_finished.wait()
 
     def on_protocol_run(self):
         """
         Handler called when a protocol starts running.
         """
         app = get_app()
-        if not self.control_board:
-            logger.warning("Warning: no control board connected.")
+        if not self.dropbot_connected.is_set():
+            _L().warning("Warning: no control board connected.")
         elif (self.control_board.number_of_channels <=
               app.dmf_device.max_channel()):
-            logger.warning("Warning: currently connected board does not have "
-                           "enough channels for this protocol.")
+            _L().warning("Warning: currently connected board does not have "
+                         "enough channels for this protocol.")
 
     def on_protocol_pause(self):
         """
@@ -1259,9 +1437,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         app = get_app()
         self._kill_running_step()
-        if self.control_board and not app.realtime_mode:
+        if self.dropbot_connected.is_set() and not app.realtime_mode:
             # Turn off all electrodes
-            logger.debug('Turning off all electrodes.')
+            _L().debug('Turning off all electrodes.')
             self.control_board.hv_output_enabled = False
 
     def on_experiment_log_selection_changed(self, data):
@@ -1273,6 +1451,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         pass
 
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_voltage(self, voltage):
         """
         Set the waveform voltage.
@@ -1280,9 +1459,16 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         Parameters:
             voltage : RMS voltage
         """
-        logger.info("set_voltage(%.1f)" % voltage)
+        _L().info("%.1f", voltage)
         self.control_board.voltage = voltage
 
+        # Cache measured actuation voltage. Delay before measuring the
+        # actuation voltage to give it time to settle.
+        gobject.timeout_add(100, lambda *args:
+                            setattr(self, 'actuation_voltage',
+                                    self.control_board.measure_voltage()))
+
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_frequency(self, frequency):
         """
         Set the waveform frequency.
@@ -1290,23 +1476,20 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         Parameters:
             frequency : frequency in Hz
         """
-        logger.info("set_frequency(%.1f)" % frequency)
+        _L().info("%.1f", frequency)
         self.control_board.frequency = frequency
         self.current_frequency = frequency
 
     def on_step_options_changed(self, plugin, step_number):
-        logger.info('on_step_options_changed(): %s step #%d',
-                    plugin, step_number)
         app = get_app()
         if (app.protocol and not app.running and not app.realtime_mode and
             (plugin == 'microdrop.gui.dmf_device_controller' or plugin ==
              self.name) and app.protocol.current_step_number == step_number):
+            _L().info('%s step #%d', plugin, step_number)
             self.on_step_run()
 
     def on_step_swapped(self, original_step_number, new_step_number):
-        logger.info('on_step_swapped():'
-                    'original_step_number=%d, new_step_number=%d',
-                    original_step_number, new_step_number)
+        _L().info('%d -> %d', original_step_number, new_step_number)
         self.on_step_options_changed(self.name,
                                      get_app().protocol.current_step_number)
 
@@ -1357,7 +1540,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         if self.dropbot_connected.is_set() and app_values.get('Auto-run '
                                                               'diagnostic '
                                                               'tests'):
-            logger.info('Running diagnostic tests')
+            _L().info('Running diagnostic tests')
             tests = ['system_info',
                      'test_i2c',
                      'test_voltage',
@@ -1370,18 +1553,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 results[test] = test_func(self.control_board)
             db.hardware_test.log_results(results, self.diagnostics_results_dir)
         else:
-            logger.info('DropBot not connected - not running diagnostic tests')
+            _L().info('DropBot not connected - not running diagnostic tests')
 
         self._use_cached_capacitance_prompt()
 
     @gtk_threadsafe
     def _use_cached_capacitance_prompt(self):
         '''
-        .. versionadded: 0.18
+        .. versionadded:: 0.18
         '''
         app_values = self.get_app_values()
-        if (self.control_board and (app_values['c_liquid'] > 0 or
-                                    app_values['c_filler'] > 0)):
+        if (self.dropbot_connected.is_set() and (app_values['c_liquid'] > 0 or
+                                                 app_values['c_filler'] > 0)):
             response = yesno('Use cached value for c<sub>liquid</sub> '
                              'and c<sub>filler</sub>?')
             # reset the cached capacitance values
