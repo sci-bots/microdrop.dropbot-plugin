@@ -1401,6 +1401,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         ----------
         capacitance_updates : list
             List of ``"capacitance-updated"`` event messages.
+
+
+        .. versionchanged:: X.X.X
+            Use actuated channels lists and actuated areas from capacitance
+            updates.
         '''
         app = get_app()
 
@@ -1418,12 +1423,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                   ((df['end'] - self.device_time_sync['device_us']) *
                    1e-6).map(lambda x: dt.timedelta(seconds=x)))
         df.insert(1, 'step', app.protocol.current_step_number + 1)
-        # XXX Must assign repeated list, since broadcast assigning of a list
-        # does not work.
-        channels = tuple(np.where(self.control_board
-                                  .state_of_channels)[0].tolist())
-        df.insert(2, 'channels', [channels] * df.shape[0])
-        df.insert(3, 'area', self.actuated_area)
         duration = df.end - df.start
         # Drop `start` and `end` columns since they have been encoded in the
         # `timestamp_utc`, `n_samples`, and `sampling_rate_hz` columns.
