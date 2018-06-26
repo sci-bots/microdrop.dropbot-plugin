@@ -322,7 +322,11 @@ def require_test_board(func):
     '''
     Decorator to prompt user to insert DropBot test board.
 
+
     .. versionchanged:: 0.16
+
+    .. versionchanged:: X.X.X
+        Add clickable hyperlink to DropBot Test Board documentation.
     '''
     @wraps(func)
     def _wrapped(*args, **kwargs):
@@ -332,7 +336,24 @@ def require_test_board(func):
         dialog = animation_dialog(image_paths, loop=True,
                                   buttons=gtk.BUTTONS_OK_CANCEL)
         dialog.props.text = ('<b>Please insert the DropBot test board</b>\n\n'
-                             'For more info, see: https://goo.gl/9uHGNW')
+                             'For more info, see '
+                             '<a href="https://github.com/sci-bots/dropbot-v3/wiki/DropBot-Test-Board#loading-dropbot-test-board">'
+                             'the DropBot Test Board documentation</a>')
+
+        def _on_link_clicked(label, uri):
+            '''
+            Callback to workaround the following error:
+
+                GtkWarning: No application is registered as handling this file
+
+            This is a known issue, e.g., https://bitbucket.org/tortoisehg/hgtk/issues/1656/link-in-about-box-doesnt-work#comment-312511
+            '''
+            webbrowser.open_new_tab(uri)
+            return True
+        # Use `activate-link` callback to manually handle action when hyperlink
+        # is clicked/activated.
+        dialog.label.connect("activate-link", _on_link_clicked)
+
         dialog.props.use_markup = True
         response = dialog.run()
         dialog.destroy()
