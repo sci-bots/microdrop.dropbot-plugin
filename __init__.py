@@ -108,7 +108,7 @@ class DmfZmqPlugin(ZmqPlugin):
         any messages accordingly.
 
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.25.1
             Do not set actuated area according to electrode controller plugin
             messages.  Actuated area should be updated **_only once the DropBot
             reports the channels have been actuated_**.
@@ -494,7 +494,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 Update local list of actuated channels and associated actuated
                 area from ``channels-updated`` device events.
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.25.1
                 Write the actuated channels list and actuated area to the debug
                 log when the DropBot reports the actuated channels.
             '''
