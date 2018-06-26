@@ -106,6 +106,12 @@ class DmfZmqPlugin(ZmqPlugin):
         """
         Check for messages on command and subscription sockets and process
         any messages accordingly.
+
+
+        .. versionchanged:: 2.25.1
+            Do not set actuated area according to electrode controller plugin
+            messages.  Actuated area should be updated **_only once the DropBot
+            reports the channels have been actuated_**.
         """
         try:
             msg_frames = self.command_socket.recv_multipart(zmq.NOBLOCK)
@@ -125,11 +131,9 @@ class DmfZmqPlugin(ZmqPlugin):
                 if msg['content']['command'] in ('set_electrode_state',
                                                  'set_electrode_states'):
                     data = decode_content_data(msg)
-                    self.parent.actuated_area = data['actuated_area']
                     self.parent.update_channel_states(data['channel_states'])
                 elif msg['content']['command'] == 'get_channel_states':
                     data = decode_content_data(msg)
-                    self.parent.actuated_area = data['actuated_area']
                     self.parent.channel_states =\
                         self.parent.channel_states.iloc[0:0]
                     self.parent.update_channel_states(data['channel_states'])
@@ -489,6 +493,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             .. versionchanged:: 2.25
                 Update local list of actuated channels and associated actuated
                 area from ``channels-updated`` device events.
+
+            .. versionchanged:: 2.25.1
+                Write the actuated channels list and actuated area to the debug
+                log when the DropBot reports the actuated channels.
             '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
@@ -553,6 +561,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     self.actuated_area = actuated_areas.sum()
                 else:
                     self.actuated_area = 0
+                _L().debug('actuated electrodes: %s (%s mm^2)',
+                           self.actuated_channels, self.actuated_area)
 
             (self.control_board.signals.signal('channels-updated')
              .connect(_on_channels_updated, weak=False))
