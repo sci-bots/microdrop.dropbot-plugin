@@ -106,6 +106,12 @@ class DmfZmqPlugin(ZmqPlugin):
         """
         Check for messages on command and subscription sockets and process
         any messages accordingly.
+
+
+        .. versionchanged:: X.X.X
+            Do not set actuated area according to electrode controller plugin
+            messages.  Actuated area should be updated **_only once the DropBot
+            reports the channels have been actuated_**.
         """
         try:
             msg_frames = self.command_socket.recv_multipart(zmq.NOBLOCK)
@@ -125,11 +131,9 @@ class DmfZmqPlugin(ZmqPlugin):
                 if msg['content']['command'] in ('set_electrode_state',
                                                  'set_electrode_states'):
                     data = decode_content_data(msg)
-                    self.parent.actuated_area = data['actuated_area']
                     self.parent.update_channel_states(data['channel_states'])
                 elif msg['content']['command'] == 'get_channel_states':
                     data = decode_content_data(msg)
-                    self.parent.actuated_area = data['actuated_area']
                     self.parent.channel_states =\
                         self.parent.channel_states.iloc[0:0]
                     self.parent.update_channel_states(data['channel_states'])
