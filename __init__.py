@@ -493,6 +493,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             .. versionchanged:: 2.25
                 Update local list of actuated channels and associated actuated
                 area from ``channels-updated`` device events.
+
+            .. versionchanged:: X.X.X
+                Write the actuated channels list and actuated area to the debug
+                log when the DropBot reports the actuated channels.
             '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
@@ -557,6 +561,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     self.actuated_area = actuated_areas.sum()
                 else:
                     self.actuated_area = 0
+                _L().debug('actuated electrodes: %s (%s mm^2)',
+                           self.actuated_channels, self.actuated_area)
 
             (self.control_board.signals.signal('channels-updated')
              .connect(_on_channels_updated, weak=False))
