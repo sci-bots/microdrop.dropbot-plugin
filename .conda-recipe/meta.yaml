@@ -21,7 +21,8 @@ requirements:
     - conda-helpers >=0.4
     #: .. versionchanged:: 2.23
     #: .. versionchanged:: 2.24
-    - dropbot >=1.51
+    #: .. versionchanged:: 2.25
+    - dropbot >=1.51.2
     - flatland-fork
     - json-tricks >=3.8.0
     - microdrop >=2.0
@@ -45,7 +46,8 @@ requirements:
     - conda-helpers >=0.4
     #: .. versionchanged:: 2.23
     #: .. versionchanged:: 2.24
-    - dropbot >=1.51
+    #: .. versionchanged:: 2.25
+    - dropbot >=1.51.2
     - flatland-fork
     - json-tricks >=3.8.0
     - microdrop >=2.0

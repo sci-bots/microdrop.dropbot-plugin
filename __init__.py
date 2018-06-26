@@ -322,7 +322,11 @@ def require_test_board(func):
     '''
     Decorator to prompt user to insert DropBot test board.
 
+
     .. versionchanged:: 0.16
+
+    .. versionchanged:: 2.25
+        Add clickable hyperlink to DropBot Test Board documentation.
     '''
     @wraps(func)
     def _wrapped(*args, **kwargs):
@@ -332,7 +336,24 @@ def require_test_board(func):
         dialog = animation_dialog(image_paths, loop=True,
                                   buttons=gtk.BUTTONS_OK_CANCEL)
         dialog.props.text = ('<b>Please insert the DropBot test board</b>\n\n'
-                             'For more info, see: https://goo.gl/9uHGNW')
+                             'For more info, see '
+                             '<a href="https://github.com/sci-bots/dropbot-v3/wiki/DropBot-Test-Board#loading-dropbot-test-board">'
+                             'the DropBot Test Board documentation</a>')
+
+        def _on_link_clicked(label, uri):
+            '''
+            Callback to workaround the following error:
+
+                GtkWarning: No application is registered as handling this file
+
+            This is a known issue, e.g., https://bitbucket.org/tortoisehg/hgtk/issues/1656/link-in-about-box-doesnt-work#comment-312511
+            '''
+            webbrowser.open_new_tab(uri)
+            return True
+        # Use `activate-link` callback to manually handle action when hyperlink
+        # is clicked/activated.
+        dialog.label.connect("activate-link", _on_link_clicked)
+
         dialog.props.use_markup = True
         response = dialog.run()
         dialog.destroy()
@@ -430,6 +451,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         #: .. versionadded:: 2.24
         self.device_time_sync = {}
 
+        #: .. versionadded:: 2.25
+        self.actuated_channels = []
+
         #: .. versionadded:: 2.24
         self.step_cancelled = threading.Event()
         #: .. versionadded:: 2.24
@@ -461,6 +485,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
                 Update local actuation voltage with voltage sent in capacitance
                 update events.
+
+            .. versionchanged:: 2.25
+                Update local list of actuated channels and associated actuated
+                area from ``channels-updated`` device events.
             '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
@@ -503,6 +531,32 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.device_time_sync = {'host': dt.datetime.utcnow(),
                                      'device_us':
                                      self.control_board.microseconds()}
+
+            def _on_channels_updated(message):
+                '''
+                Message keys:
+                 - ``"n"``: number of actuated channel
+                 - ``"actuated"``: list of actuated channel identifiers.
+                 - ``"start"``: ms counter before setting shift registers
+                 - ``"end"``: ms counter after setting shift registers
+                '''
+                self.actuated_channels = message['actuated']
+                if self.actuated_channels:
+                    app = get_app()
+                    actuated_electrodes = \
+                        (app.dmf_device.actuated_electrodes(self
+                                                            .actuated_channels)
+                         .dropna())
+                    actuated_areas = (app.dmf_device
+                                      .electrode_areas.ix[actuated_electrodes
+                                                          .values])
+                    self.actuated_area = actuated_areas.sum()
+                else:
+                    self.actuated_area = 0
+
+            (self.control_board.signals.signal('channels-updated')
+             .connect(_on_channels_updated, weak=False))
+            _L().info('connected channels updated signal callback')
 
         self.connect('dropbot-connected', _on_dropbot_connected)
 
@@ -741,6 +795,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.on_step_run()
 
     def cleanup_plugin(self):
+        '''
+        .. versionchanged:: 2.25
+            Kill any currently running step.
+        '''
+        self._kill_running_step()
         if self.plugin_timeout_id is not None:
             gobject.source_remove(self.plugin_timeout_id)
         if self.plugin is not None:
@@ -1199,6 +1258,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def _apply_state(self):
+        '''
+        .. versionchanged:: 2.25
+            Use :meth:`_on_step_capacitance_updated` callback to add current
+            list of actuated channels and associated actuated area to
+            capacitance update message.
+        '''
         options = self.get_step_options()
         max_channels = self.control_board.number_of_channels
         # All channels should default to off.
@@ -1226,7 +1291,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # Connect to `capacitance-updated` signal to record capacitance
         # values measured during the step.
         (self.control_board.signals.signal('capacitance-updated')
-            .connect(self._step_capacitances.append, weak=False))
+         .connect(self._on_step_capacitance_updated, weak=False))
         logger.info('connected capacitance updated signal callback')
 
     def on_step_run(self):
@@ -1358,6 +1423,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         ----------
         capacitance_updates : list
             List of ``"capacitance-updated"`` event messages.
+
+
+        .. versionchanged:: 2.25
+            Use actuated channels lists and actuated areas from capacitance
+            updates.
         '''
         app = get_app()
 
@@ -1375,12 +1445,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                   ((df['end'] - self.device_time_sync['device_us']) *
                    1e-6).map(lambda x: dt.timedelta(seconds=x)))
         df.insert(1, 'step', app.protocol.current_step_number + 1)
-        # XXX Must assign repeated list, since broadcast assigning of a list
-        # does not work.
-        channels = tuple(np.where(self.control_board
-                                  .state_of_channels)[0].tolist())
-        df.insert(2, 'channels', [channels] * df.shape[0])
-        df.insert(3, 'area', self.actuated_area)
         duration = df.end - df.start
         # Drop `start` and `end` columns since they have been encoded in the
         # `timestamp_utc`, `n_samples`, and `sampling_rate_hz` columns.
@@ -1394,6 +1458,22 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         with gzip.open(csv_output_path, 'a', compresslevel=9) as output:
             df.to_csv(output, index=False, header=include_header)
 
+    def _on_step_capacitance_updated(self, message):
+        '''
+        .. versionadded:: 2.25
+
+
+        Callback for ``capacitance-updated`` DropBot device events (only called
+        when step is running).
+
+        Add current list of actuated channels and associated actuated electrode
+        area to capacitance update message and add message to list of updates
+        for the currently running step.
+        '''
+        message['actuated_channels'] = self.actuated_channels
+        message['actuated_area'] = self.actuated_area
+        self._step_capacitances.append(message)
+
     def complete_step(self, return_value=None):
         self.timeout_id = None
         app = get_app()
@@ -1402,7 +1482,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 # Disconnect from `capacitance-updated` signal to stop
                 # recording capacitance values now that the step has finished.
                 (self.control_board.signals.signal('capacitance-updated')
-                 .disconnect(self._step_capacitances.append))
+                 .disconnect(self._on_step_capacitance_updated))
             if self._step_capacitances:
                 self.log_capacitance_updates(self._step_capacitances)
                 _L().info('logged %d capacitance readings.',
@@ -1411,6 +1491,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             emit_signal('on_step_complete', [self.name, return_value])
 
     def _kill_running_step(self):
+        '''
+        .. versionchanged:: 2.25
+            Stop recording capacitance updates.
+        '''
         if self.timeout_id:
             _L().debug('remove timeout_id=%d', self.timeout_id)
             gobject.source_remove(self.timeout_id)
@@ -1418,6 +1502,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.step_cancelled.set()
         # Wait for capacitance threshold watching thread to stop.
         self.capacitance_watch_finished.wait()
+        if self.dropbot_connected.is_set():
+            # Stop recording capacitance updates.
+            (self.control_board.signals.signal('capacitance-updated')
+             .disconnect(self._step_capacitances.append))
 
     def on_protocol_run(self):
         """
