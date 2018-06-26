@@ -544,8 +544,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 if self.actuated_channels:
                     app = get_app()
                     actuated_electrodes = \
-                        app.dmf_device.actuated_electrodes(self
-                                                           .actuated_channels)
+                        (app.dmf_device.actuated_electrodes(self
+                                                            .actuated_channels)
+                         .dropna())
                     actuated_areas = (app.dmf_device
                                       .electrode_areas.ix[actuated_electrodes
                                                           .values])
