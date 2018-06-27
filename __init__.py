@@ -1328,6 +1328,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             to watch for the threshold capacitance (if set) to be reached.  If
             the threshold is not met by the specified duration of the step,
             time out and stop the protocol.
+
+        .. versionchanged:: X.X.X
+            Connect to ``capacitance-updated`` event (in addition to
+            ``capacitance-exceeded`` event) to check against target
+            capacitance.
         """
         self._kill_running_step()
 
@@ -1381,15 +1386,27 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     event = or_event.OrEvent(self.step_cancelled,
                                              self.capacitance_exceeded)
                     duration_s = options['duration'] * 1e-3
+
+                    # Connect capacitance updates callback to check against
+                    # target capacitance.
+                    def _check_threshold(message):
+                        if message['new_value'] > target_capacitance:
+                            self.capacitance_exceeded.set()
+                            self.capacitance_exceeded.result = message
+
+                    (self.control_board.signals.signal('capacitance-updated')
+                     .connect(_check_threshold, weak=False))
+
                     if event.wait(duration_s):
                         if self.capacitance_exceeded.is_set():
+                            capacitance = (self.capacitance_exceeded
+                                           .result['new_value'])
                             # Step was completed successfully within specified
                             # duration.
                             _L().info('Target capacitance was reached: %sF > '
-                                      '%sF', *map(si.si_format,
-                                                  (self.capacitance_exceeded
-                                                   .result['new_value'],
-                                                   target_capacitance)))
+                                        '%sF', *map(si.si_format,
+                                                    (capacitance,
+                                                     target_capacitance)))
                             self.capacitance_exceeded.clear()
                             gtk_threadsafe(self.complete_step)()
                         elif self.step_cancelled.is_set():
@@ -1405,6 +1422,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                        (self.device_load_capacitance,
                                         target_capacitance, duration_s)))
                         gtk_threadsafe(self.complete_step)('Fail')
+
+                    # Disconnect capacitance updates callback.
+                    (self.control_board.signals.signal('capacitance-updated')
+                     .disconnect(_check_threshold))
+
                     # Signal that capacitance watch thread has completed.
                     self.capacitance_watch_finished.set()
                     _L().debug('thread finished: %s', thread.get_ident())
