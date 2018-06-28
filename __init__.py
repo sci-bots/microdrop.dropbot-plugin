@@ -760,7 +760,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         Override to set default values based on their corresponding app options.
 
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.25.2
             Deprecate the ``max_repeats`` step option since it is no longer
             used.
         """
@@ -1327,7 +1327,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             the threshold is not met by the specified duration of the step,
             time out and stop the protocol.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.25.2
             Connect to ``capacitance-updated`` event (in addition to
             ``capacitance-exceeded`` event) to check against target
             capacitance.
