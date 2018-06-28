@@ -781,12 +781,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                        .using(default=0,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
-                                          ValueAtMost(maximum=1.0)]),
-                       #: .. versionadded:: 0.18
-                       Integer.named('max_repeats')
-                       .using(default=3,
-                              optional=True,
-                              validators=[ValueAtLeast(minimum=0)]))
+                                          ValueAtMost(maximum=1.0)]))
 
     def update_channel_states(self, channel_states):
         _L().info('update_channel_states')
