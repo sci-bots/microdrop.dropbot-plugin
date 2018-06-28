@@ -20,7 +20,6 @@ from functools import wraps
 import Queue
 import datetime as dt
 import gzip
-import inspect
 import json
 import logging
 import re
@@ -31,7 +30,7 @@ import types
 import warnings
 import webbrowser
 
-from flatland import Integer, Float, Form, Enum, Boolean
+from flatland import Integer, Float, Form, Boolean
 from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
                                                 FigureCanvas)
@@ -49,7 +48,6 @@ from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
 from pygtkhelpers.utils import gsignal
-from serial_device import get_serial_ports
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
 import base_node_rpc as bnr
@@ -760,6 +758,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     def get_step_form_class(self):
         """
         Override to set default values based on their corresponding app options.
+
+
+        .. versionchanged:: 2.25.2
+            Deprecate the ``max_repeats`` step option since it is no longer
+            used.
         """
         app_values = self.get_app_values()
         return Form.of(Integer.named('duration')
@@ -781,12 +784,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                        .using(default=0,
                               optional=True,
                               validators=[ValueAtLeast(minimum=0),
-                                          ValueAtMost(maximum=1.0)]),
-                       #: .. versionadded:: 0.18
-                       Integer.named('max_repeats')
-                       .using(default=3,
-                              optional=True,
-                              validators=[ValueAtLeast(minimum=0)]))
+                                          ValueAtMost(maximum=1.0)]))
 
     def update_channel_states(self, channel_states):
         _L().info('update_channel_states')
@@ -1328,6 +1326,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             to watch for the threshold capacitance (if set) to be reached.  If
             the threshold is not met by the specified duration of the step,
             time out and stop the protocol.
+
+        .. versionchanged:: 2.25.2
+            Connect to ``capacitance-updated`` event (in addition to
+            ``capacitance-exceeded`` event) to check against target
+            capacitance.
         """
         self._kill_running_step()
 
@@ -1372,8 +1375,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 _L().info('target capacitance: %sF (actuated area: %s '
                           'mm^2)', si.si_format(target_capacitance),
                           self.actuated_area)
-                self.control_board.update_state(target_capacitance=
-                                                target_capacitance)
+                self.control_board \
+                    .update_state(target_capacitance=target_capacitance)
 
                 def _wait_for_target_capacitance():
                     _L().debug('thread started: %s', thread.get_ident())
@@ -1381,14 +1384,26 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     event = or_event.OrEvent(self.step_cancelled,
                                              self.capacitance_exceeded)
                     duration_s = options['duration'] * 1e-3
+
+                    # Connect capacitance updates callback to check against
+                    # target capacitance.
+                    def _check_threshold(message):
+                        if message['new_value'] > target_capacitance:
+                            self.capacitance_exceeded.set()
+                            self.capacitance_exceeded.result = message
+
+                    (self.control_board.signals.signal('capacitance-updated')
+                     .connect(_check_threshold, weak=False))
+
                     if event.wait(duration_s):
                         if self.capacitance_exceeded.is_set():
+                            capacitance = (self.capacitance_exceeded
+                                           .result['new_value'])
                             # Step was completed successfully within specified
                             # duration.
                             _L().info('Target capacitance was reached: %sF > '
                                       '%sF', *map(si.si_format,
-                                                  (self.capacitance_exceeded
-                                                   .result['new_value'],
+                                                  (capacitance,
                                                    target_capacitance)))
                             self.capacitance_exceeded.clear()
                             gtk_threadsafe(self.complete_step)()
@@ -1405,6 +1420,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                        (self.device_load_capacitance,
                                         target_capacitance, duration_s)))
                         gtk_threadsafe(self.complete_step)('Fail')
+
+                    # Disconnect capacitance updates callback.
+                    (self.control_board.signals.signal('capacitance-updated')
+                     .disconnect(_check_threshold))
+
                     # Signal that capacitance watch thread has completed.
                     self.capacitance_watch_finished.set()
                     _L().debug('thread finished: %s', thread.get_ident())
