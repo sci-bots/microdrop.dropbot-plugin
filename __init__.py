@@ -513,17 +513,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             else:
                 self.emit('chip-inserted')
 
-            # Set capacitance exceeded event whenever the
-            # `'capacitance-exceeded'` signal is emitted from the DropBot.
-            def _on_capacitance_exceeded(message):
-                if 'V_a' in message:
-                    self.actuation_voltage = message['V_a']
-                self.capacitance_exceeded.result = message
-                self.capacitance_exceeded.set()
-            (self.control_board.signals.signal('capacitance-exceeded')
-             .connect(_on_capacitance_exceeded, weak=False))
-            _L().info('connected capacitance exceeded signal callback')
-
             # Update cached device load capacitance each time the
             # `'capacitance-updated'` signal is emitted from the DropBot.
             def _on_capacitance_updated(message):
@@ -1379,8 +1368,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 _L().info('target capacitance: %sF (actuated area: %s '
                           'mm^2)', si.si_format(target_capacitance),
                           self.actuated_area)
-                self.control_board \
-                    .update_state(target_capacitance=target_capacitance)
 
                 def _wait_for_target_capacitance():
                     _L().debug('thread started: %s', thread.get_ident())
@@ -1440,7 +1427,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.capacitance_watch_thread.daemon = True
                 self.capacitance_watch_thread.start()
             else:
-                self.control_board.update_state(target_capacitance=0)
                 _L().info('actuated area: %s mm^2', self.actuated_area)
                 self.timeout_id = gobject.timeout_add(options['duration'],
                                                       self.complete_step)
