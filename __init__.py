@@ -16,6 +16,7 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
+from collections import deque
 from functools import wraps
 import Queue
 import datetime as dt
@@ -450,6 +451,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         #: .. versionadded:: 2.24
         self._step_capacitances = []
 
+        #: .. versionadded:: 2.26
+        self._state_applied = threading.Event()
+
         #: .. versionadded:: 2.24
         self.device_time_sync = {}
 
@@ -495,6 +499,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             .. versionchanged:: 2.25.1
                 Write the actuated channels list and actuated area to the debug
                 log when the DropBot reports the actuated channels.
+
+            .. versionchanged:: 2.26
+                Set :attr:`_state_applied` event and log actuated channels/area
+                to ``INFO`` level when ``channels-updated`` DropBot event is
+                received.
             '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
@@ -509,17 +518,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             else:
                 self.emit('chip-inserted')
 
-            # Set capacitance exceeded event whenever the
-            # `'capacitance-exceeded'` signal is emitted from the DropBot.
-            def _on_capacitance_exceeded(message):
-                if 'V_a' in message:
-                    self.actuation_voltage = message['V_a']
-                self.capacitance_exceeded.result = message
-                self.capacitance_exceeded.set()
-            (self.control_board.signals.signal('capacitance-exceeded')
-             .connect(_on_capacitance_exceeded, weak=False))
-            _L().info('connected capacitance exceeded signal callback')
-
             # Update cached device load capacitance each time the
             # `'capacitance-updated'` signal is emitted from the DropBot.
             def _on_capacitance_updated(message):
@@ -531,7 +529,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
              .connect(_on_capacitance_updated, weak=False))
             # Request for the DropBot to measure the device load capacitance
             # every 100 ms.
-            self.control_board.update_state(capacitance_update_interval_ms=100)
+            app_values = self.get_app_values()
+            self.control_board.update_state(capacitance_update_interval_ms=
+                                            app_values['c_update_ms'])
             _L().info('connected capacitance updated signal callback')
 
             self.device_time_sync = {'host': dt.datetime.utcnow(),
@@ -559,8 +559,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     self.actuated_area = actuated_areas.sum()
                 else:
                     self.actuated_area = 0
-                _L().debug('actuated electrodes: %s (%s mm^2)',
-                           self.actuated_channels, self.actuated_area)
+                _L().info('actuated electrodes: %s (%s mm^2)',
+                          self.actuated_channels, self.actuated_area)
+                self._state_applied.set()
 
             (self.control_board.signals.signal('channels-updated')
              .connect(_on_channels_updated, weak=False))
@@ -740,6 +741,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         .. versionchanged:: 0.22.2
             Remove serial port, which is no longer used as of version 0.22.
+
+        .. versionchanged:: 2.26
+            Add capacitance update interval, i.e., ``c_update_ms``, specifying
+            the interval to request the DropBot to send capacitance measurement
+            updates.
         '''
         return Form.of(
             Float.named('default_duration').using(default=1000, optional=True),
@@ -753,7 +759,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                           properties={'show_in_gui': False}),
             #: .. versionadded:: 0.18
             Float.named('c_filler').using(default=0, optional=True,
-                                          properties={'show_in_gui': False}))
+                                          properties={'show_in_gui': False}),
+            #: .. versionadded:: 2.26
+            Integer.named('c_update_ms').using(default=10, optional=True,
+                                               properties={'show_in_gui':
+                                                           True}))
 
     def get_step_form_class(self):
         """
@@ -937,6 +947,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 0.22.2
             Remove check for serial port, which is no longer used as of version
             0.22.
+
+        .. versionchanged:: 2.26
+            Apply specified capacitance update interval to DropBot (if
+            connected).
         '''
         app = get_app()
         if plugin_name == self.name:
@@ -944,10 +958,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         elif plugin_name == app.name:
             # Turn off all electrodes if we're not in realtime mode and not
             # running a protocol.
-            if self.dropbot_connected.is_set() and (not app.realtime_mode and
-                                                    not app.running):
-                _L().info('Turning off all electrodes.')
-                self.control_board.hv_output_enabled = False
+            if self.dropbot_connected.is_set():
+                app_values = self.get_app_values()
+                self.control_board.update_state(capacitance_update_interval_ms=
+                                                app_values['c_update_ms'])
+                if not app.realtime_mode and not app.running:
+                    _L().info('Turning off all electrodes.')
+                    self.control_board.hv_output_enabled = False
 
     def connect_dropbot(self):
         """
@@ -1271,7 +1288,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Use :meth:`_on_step_capacitance_updated` callback to add current
             list of actuated channels and associated actuated area to
             capacitance update message.
+
+        .. versionchanged:: 2.26
+            Clear :attr:`_state_applied` event since new state is being
+            applied.
         '''
+        self.capacitance_exceeded.clear()
+        self._state_applied.clear()
         options = self.get_step_options()
         max_channels = self.control_board.number_of_channels
         # All channels should default to off.
@@ -1331,6 +1354,14 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Connect to ``capacitance-updated`` event (in addition to
             ``capacitance-exceeded`` event) to check against target
             capacitance.
+
+        .. versionchanged:: 2.26
+            Wait for :attr:`_state_applied` event to ensure pending electrode
+            actuations have completed before computing target capacitance based
+
+            Require **5 consecutive** capacitance updates above the target
+            threshold to trigger step completion.  This increases confidence
+            that the target capacitance has actually been met.
         """
         self._kill_running_step()
 
@@ -1369,26 +1400,46 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 #
                 # Note: `app_values['c_liquid']` represents a *specific
                 # capacitance*, i.e., has units of $F/mm^2$.
-                target_capacitance = (options['volume_threshold'] *
-                                      self.actuated_area *
-                                      app_values['c_liquid'])
-                _L().info('target capacitance: %sF (actuated area: %s '
-                          'mm^2)', si.si_format(target_capacitance),
-                          self.actuated_area)
-                self.control_board \
-                    .update_state(target_capacitance=target_capacitance)
+                duration_s = options['duration'] * 1e-3
+                if self._state_applied.wait(duration_s):
+                    target_capacitance = (options['volume_threshold'] *
+                                        self.actuated_area *
+                                        app_values['c_liquid'])
+                    _L().info('target capacitance: %sF (actuated area: %s mm^2'
+                              ', actuated channels: %s)',
+                              si.si_format(target_capacitance),
+                              self.actuated_area, self.actuated_channels)
+                else:
+                    # Timed out waiting for capacitance.
+                    # XXX Include the value of the capacitance that *was*
+                    # reached in the log message.
+                    _L().warn('Timed out waiting for DropBot to apply '
+                              'requested settings.')
+                    gtk_threadsafe(self.complete_step)('Fail')
+                    return
 
                 def _wait_for_target_capacitance():
                     _L().debug('thread started: %s', thread.get_ident())
                     self.capacitance_watch_finished.clear()
                     event = or_event.OrEvent(self.step_cancelled,
                                              self.capacitance_exceeded)
-                    duration_s = options['duration'] * 1e-3
+                    capacitance_window = deque()
+                    N = 5
 
                     # Connect capacitance updates callback to check against
                     # target capacitance.
                     def _check_threshold(message):
-                        if message['new_value'] > target_capacitance:
+                        capacitance_window.appendleft(message['new_value'])
+                        if len(capacitance_window) > N:
+                            capacitance_window.pop()
+                        self.capacitance_exceeded.window = \
+                            list(capacitance_window)
+                        stable_capacitance = min(self.capacitance_exceeded
+                                                 .window)
+
+                        if all([len(capacitance_window) >= N,
+                                stable_capacitance > target_capacitance]):
+                            message['new_value'] = stable_capacitance
                             self.capacitance_exceeded.set()
                             self.capacitance_exceeded.result = message
 
@@ -1397,15 +1448,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
                     if event.wait(duration_s):
                         if self.capacitance_exceeded.is_set():
+                            self.capacitance_exceeded.clear()
                             capacitance = (self.capacitance_exceeded
                                            .result['new_value'])
                             # Step was completed successfully within specified
                             # duration.
                             _L().info('Target capacitance was reached: %sF > '
-                                      '%sF', *map(si.si_format,
-                                                  (capacitance,
-                                                   target_capacitance)))
-                            self.capacitance_exceeded.clear()
+                                      '%sF (window: %s)',
+                                      *(map(si.si_format,
+                                            (capacitance, target_capacitance))
+                                        + [map(si.si_format,
+                                               self.capacitance_exceeded
+                                               .window)]))
                             gtk_threadsafe(self.complete_step)()
                         elif self.step_cancelled.is_set():
                             # Step was cancelled.
@@ -1417,7 +1471,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                         _L().warn('Timed out.  Capacitance %sF did not reach '
                                   'target of %sF after %ss.',
                                   *map(si.si_format,
-                                       (self.device_load_capacitance,
+                                       (min(capacitance_window),
                                         target_capacitance, duration_s)))
                         gtk_threadsafe(self.complete_step)('Fail')
 
@@ -1436,7 +1490,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.capacitance_watch_thread.daemon = True
                 self.capacitance_watch_thread.start()
             else:
-                self.control_board.update_state(target_capacitance=0)
                 _L().info('actuated area: %s mm^2', self.actuated_area)
                 self.timeout_id = gobject.timeout_add(options['duration'],
                                                       self.complete_step)
@@ -1458,6 +1511,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.25
             Use actuated channels lists and actuated areas from capacitance
             updates.
+
+        .. versionchanged:: 2.26
+            Remove ``sampling_rate_hz`` column.  Move ``capacitance`` column to
+            index 1 (adjacent to ``timestamp_utc`` column).
         '''
         app = get_app()
 
@@ -1474,16 +1531,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         df.insert(0, 'timestamp_utc', self.device_time_sync['host'] +
                   ((df['end'] - self.device_time_sync['device_us']) *
                    1e-6).map(lambda x: dt.timedelta(seconds=x)))
-        df.insert(1, 'step', app.protocol.current_step_number + 1)
-        duration = df.end - df.start
-        # Drop `start` and `end` columns since they have been encoded in the
-        # `timestamp_utc`, `n_samples`, and `sampling_rate_hz` columns.
+        df.insert(2, 'step', app.protocol.current_step_number + 1)
+        # Drop `start` and `end` columns since relevant time information is
+        # stored in `timestamp_utc`.
         df.drop(['start', 'end'], axis=1, inplace=True)
-        df['sampling_rate_hz'] = df['n_samples'] / duration * 1e6
-
-        # Determine precision required to represent minimum value with 3
-        # decimal places.
-        double_precision = -(si.split(df.capacitance.min())[1] - 3)
 
         with gzip.open(csv_output_path, 'a', compresslevel=9) as output:
             df.to_csv(output, index=False, header=include_header)
@@ -1524,7 +1575,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         .. versionchanged:: 2.25
             Stop recording capacitance updates.
+
+        .. versionchanged:: 2.26
+            Clear :attr:`_state_applied` event.
         '''
+        self._state_applied.clear()
         if self.timeout_id:
             _L().debug('remove timeout_id=%d', self.timeout_id)
             gobject.source_remove(self.timeout_id)
