@@ -16,6 +16,7 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
+from collections import deque
 from functools import wraps
 import Queue
 import datetime as dt
@@ -1357,7 +1358,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: X.X.X
             Wait for :attr:`_state_applied` event to ensure pending electrode
             actuations have completed before computing target capacitance based
-            on electrode areas.
+
+            Require **5 consecutive** capacitance updates above the target
+            threshold to trigger step completion.  This increases confidence
+            that the target capacitance has actually been met.
         """
         self._kill_running_step()
 
@@ -1419,12 +1423,23 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     self.capacitance_watch_finished.clear()
                     event = or_event.OrEvent(self.step_cancelled,
                                              self.capacitance_exceeded)
-                    duration_s = options['duration'] * 1e-3
+                    capacitance_window = deque()
+                    N = 5
 
                     # Connect capacitance updates callback to check against
                     # target capacitance.
                     def _check_threshold(message):
-                        if message['new_value'] > target_capacitance:
+                        capacitance_window.appendleft(message['new_value'])
+                        if len(capacitance_window) > N:
+                            capacitance_window.pop()
+                        self.capacitance_exceeded.window = \
+                            list(capacitance_window)
+                        stable_capacitance = min(self.capacitance_exceeded
+                                                 .window)
+
+                        if all([len(capacitance_window) >= N,
+                                stable_capacitance > target_capacitance]):
+                            message['new_value'] = stable_capacitance
                             self.capacitance_exceeded.set()
                             self.capacitance_exceeded.result = message
 
@@ -1433,15 +1448,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
                     if event.wait(duration_s):
                         if self.capacitance_exceeded.is_set():
+                            self.capacitance_exceeded.clear()
                             capacitance = (self.capacitance_exceeded
                                            .result['new_value'])
                             # Step was completed successfully within specified
                             # duration.
                             _L().info('Target capacitance was reached: %sF > '
-                                      '%sF', *map(si.si_format,
-                                                  (capacitance,
-                                                   target_capacitance)))
-                            self.capacitance_exceeded.clear()
+                                      '%sF (window: %s)',
+                                      *(map(si.si_format,
+                                            (capacitance, target_capacitance))
+                                        + [map(si.si_format,
+                                               self.capacitance_exceeded
+                                               .window)]))
                             gtk_threadsafe(self.complete_step)()
                         elif self.step_cancelled.is_set():
                             # Step was cancelled.
@@ -1453,7 +1471,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                         _L().warn('Timed out.  Capacitance %sF did not reach '
                                   'target of %sF after %ss.',
                                   *map(si.si_format,
-                                       (self.device_load_capacitance,
+                                       (min(capacitance_window),
                                         target_capacitance, duration_s)))
                         gtk_threadsafe(self.complete_step)('Fail')
 
