@@ -451,7 +451,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         #: .. versionadded:: 2.24
         self._step_capacitances = []
 
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.26
         self._state_applied = threading.Event()
 
         #: .. versionadded:: 2.24
@@ -500,7 +500,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 Write the actuated channels list and actuated area to the debug
                 log when the DropBot reports the actuated channels.
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.26
                 Set :attr:`_state_applied` event and log actuated channels/area
                 to ``INFO`` level when ``channels-updated`` DropBot event is
                 received.
@@ -742,7 +742,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 0.22.2
             Remove serial port, which is no longer used as of version 0.22.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.26
             Add capacitance update interval, i.e., ``c_update_ms``, specifying
             the interval to request the DropBot to send capacitance measurement
             updates.
@@ -760,7 +760,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             #: .. versionadded:: 0.18
             Float.named('c_filler').using(default=0, optional=True,
                                           properties={'show_in_gui': False}),
-            #: .. versionadded:: X.X.X
+            #: .. versionadded:: 2.26
             Integer.named('c_update_ms').using(default=10, optional=True,
                                                properties={'show_in_gui':
                                                            True}))
@@ -948,7 +948,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Remove check for serial port, which is no longer used as of version
             0.22.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.26
             Apply specified capacitance update interval to DropBot (if
             connected).
         '''
@@ -1289,7 +1289,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             list of actuated channels and associated actuated area to
             capacitance update message.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.26
             Clear :attr:`_state_applied` event since new state is being
             applied.
         '''
@@ -1355,7 +1355,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             ``capacitance-exceeded`` event) to check against target
             capacitance.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.26
             Wait for :attr:`_state_applied` event to ensure pending electrode
             actuations have completed before computing target capacitance based
 
@@ -1512,7 +1512,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Use actuated channels lists and actuated areas from capacitance
             updates.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.26
             Remove ``sampling_rate_hz`` column.  Move ``capacitance`` column to
             index 1 (adjacent to ``timestamp_utc`` column).
         '''
@@ -1576,7 +1576,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.25
             Stop recording capacitance updates.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.26
             Clear :attr:`_state_applied` event.
         '''
         self._state_applied.clear()

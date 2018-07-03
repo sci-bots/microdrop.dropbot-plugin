@@ -22,7 +22,7 @@ requirements:
     #: .. versionchanged:: 2.23
     #: .. versionchanged:: 2.24
     #: .. versionchanged:: 2.25
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.26
     - dropbot >=1.51.3
     - flatland-fork
     - json-tricks >=3.8.0
@@ -48,7 +48,7 @@ requirements:
     #: .. versionchanged:: 2.23
     #: .. versionchanged:: 2.24
     #: .. versionchanged:: 2.25
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.26
     - dropbot >=1.51.3
     - flatland-fork
     - json-tricks >=3.8.0
