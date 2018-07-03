@@ -1462,6 +1462,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.25
             Use actuated channels lists and actuated areas from capacitance
             updates.
+
+        .. versionchanged:: X.X.X
+            Remove ``sampling_rate_hz`` column.  Move ``capacitance`` column to
+            index 1 (adjacent to ``timestamp_utc`` column).
         '''
         app = get_app()
 
@@ -1478,16 +1482,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         df.insert(0, 'timestamp_utc', self.device_time_sync['host'] +
                   ((df['end'] - self.device_time_sync['device_us']) *
                    1e-6).map(lambda x: dt.timedelta(seconds=x)))
-        df.insert(1, 'step', app.protocol.current_step_number + 1)
-        duration = df.end - df.start
-        # Drop `start` and `end` columns since they have been encoded in the
-        # `timestamp_utc`, `n_samples`, and `sampling_rate_hz` columns.
+        df.insert(2, 'step', app.protocol.current_step_number + 1)
+        # Drop `start` and `end` columns since relevant time information is
+        # stored in `timestamp_utc`.
         df.drop(['start', 'end'], axis=1, inplace=True)
-        df['sampling_rate_hz'] = df['n_samples'] / duration * 1e6
-
-        # Determine precision required to represent minimum value with 3
-        # decimal places.
-        double_precision = -(si.split(df.capacitance.min())[1] - 3)
 
         with gzip.open(csv_output_path, 'a', compresslevel=9) as output:
             df.to_csv(output, index=False, header=include_header)
