@@ -524,7 +524,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
              .connect(_on_capacitance_updated, weak=False))
             # Request for the DropBot to measure the device load capacitance
             # every 100 ms.
-            self.control_board.update_state(capacitance_update_interval_ms=100)
+            app_values = self.get_app_values()
+            self.control_board.update_state(capacitance_update_interval_ms=
+                                            app_values['c_update_ms'])
             _L().info('connected capacitance updated signal callback')
 
             self.device_time_sync = {'host': dt.datetime.utcnow(),
@@ -733,6 +735,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         .. versionchanged:: 0.22.2
             Remove serial port, which is no longer used as of version 0.22.
+
+        .. versionchanged:: X.X.X
+            Add capacitance update interval, i.e., ``c_update_ms``, specifying
+            the interval to request the DropBot to send capacitance measurement
+            updates.
         '''
         return Form.of(
             Float.named('default_duration').using(default=1000, optional=True),
@@ -746,7 +753,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                           properties={'show_in_gui': False}),
             #: .. versionadded:: 0.18
             Float.named('c_filler').using(default=0, optional=True,
-                                          properties={'show_in_gui': False}))
+                                          properties={'show_in_gui': False}),
+            #: .. versionadded:: X.X.X
+            Integer.named('c_update_ms').using(default=10, optional=True,
+                                               properties={'show_in_gui':
+                                                           True}))
 
     def get_step_form_class(self):
         """
@@ -937,10 +948,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         elif plugin_name == app.name:
             # Turn off all electrodes if we're not in realtime mode and not
             # running a protocol.
-            if self.dropbot_connected.is_set() and (not app.realtime_mode and
-                                                    not app.running):
-                _L().info('Turning off all electrodes.')
-                self.control_board.hv_output_enabled = False
+            if self.dropbot_connected.is_set():
+                app_values = self.get_app_values()
+                self.control_board.update_state(capacitance_update_interval_ms=
+                                                app_values['c_update_ms'])
+                if not app.realtime_mode and not app.running:
+                    _L().info('Turning off all electrodes.')
+                    self.control_board.hv_output_enabled = False
 
     def connect_dropbot(self):
         """
