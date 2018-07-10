@@ -509,6 +509,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 Set :attr:`_state_applied` event and log actuated channels/area
                 to ``INFO`` level when ``channels-updated`` DropBot event is
                 received.
+
+            .. versionchanged:: X.X.X
+                Connect to the ``output_enabled`` and ``output_disabled``
+                DropBot signals to update the chip insertion status.
             '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
@@ -522,6 +526,16 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.emit('chip-removed')
             else:
                 self.emit('chip-inserted')
+
+            # Connect to DropBot signals to monitor chip insertion status.
+            self.control_board.signals.signal('output_enabled')\
+                .connect(lambda message:
+                         gtk_threadsafe(self.emit)('chip-inserted'),
+                         weak=False)
+            self.control_board.signals.signal('output_disabled')\
+                .connect(lambda message:
+                         gtk_threadsafe(self.emit)('chip-removed'),
+                         weak=False)
 
             # Update cached device load capacitance each time the
             # `'capacitance-updated'` signal is emitted from the DropBot.
@@ -869,51 +883,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         if get_app().protocol:
             self.on_step_run()
             self._update_protocol_grid()
-
-        def _watch_for_chip():
-            '''
-            Watch for DropBot device notification for DMF chip
-            insertion/removal.
-
-            Translate incoming events to g-signal events so GUI code may
-            respond to events where necessary.
-
-            .. versionchanged:: 2.22.5
-                Gracefully handle scenario where control board disconnects
-                after loop iteration has started, but before the reference to
-                the `queues` control board attribute is resolved.
-            '''
-            # Wait for DropBot to connect.
-            while self.dropbot_connected.wait():
-                # DropBot is connected, so check for incoming events on stream
-                # queue.
-                try:
-                    timestamp, packet = (self.control_board.queues.stream
-                                         .get(block=True, timeout=.1))
-                    message = json.loads(packet.data())
-
-                    event = message.get('event')
-                    if event == 'output_enabled':
-                        gobject.idle_add(self.emit, 'chip-inserted')
-                    elif event == 'output_disabled':
-                        gobject.idle_add(self.emit, 'chip-removed')
-                except Queue.Empty:
-                    pass
-                except ValueError:
-                    pass
-                except AttributeError as exception:
-                    if str(exception).strip().endswith("no attribute 'queues'"):
-                        # `self.control_board` is `None` (i.e., DropBot
-                        # disconnected).
-                        continue
-                    else:
-                        raise
-
-        if self.chip_watch_thread is None:
-            self.chip_watch_thread = threading.Thread(target=_watch_for_chip)
-            # Stop when main thread exits.
-            self.chip_watch_thread.daemon = True
-            self.chip_watch_thread.start()
 
     def on_plugin_disable(self):
         self.cleanup_plugin()
