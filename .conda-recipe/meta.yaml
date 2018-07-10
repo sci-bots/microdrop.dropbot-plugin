@@ -37,6 +37,8 @@ requirements:
     - pip-helpers
     - pytables
     - pyyaml
+    #: .. versionadded:: X.X.X
+    - semantic_version
     #: .. versionadded:: 2.24
     - si-prefix
     # .. versionchanged:: 0.16
@@ -62,6 +64,8 @@ requirements:
     - pip-helpers
     - pytables
     - pyyaml
+    #: .. versionadded:: X.X.X
+    - semantic_version
     #: .. versionadded:: 2.24
     - si-prefix
     # .. versionchanged:: 0.16

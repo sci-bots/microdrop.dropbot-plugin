@@ -23,6 +23,7 @@ import datetime as dt
 import gzip
 import json
 import logging
+import pkg_resources
 import re
 import thread
 import threading
@@ -66,6 +67,7 @@ import numpy as np
 import or_event
 import pandas as pd
 import path_helpers as ph
+import semantic_version
 import si_prefix as si
 import tables
 import zmq
@@ -1006,6 +1008,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             .. versionadded:: 0.22
 
             Attempt connection to DropBot.
+
+
+            .. versionchanged:: X.X.X
+                Ignore mismatch between DropBot driver and firmware versions as
+                long as base minor versions are equal, i.e., assume API is
+                backwards compatible.
             '''
             try:
                 self.control_board = db.SerialProxy(**kwargs)
@@ -1016,9 +1024,28 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             except bnr.proxy.DeviceVersionMismatch as exception:
                 # DropBot device software version does not match host software
                 # version.
-                _offer_to_flash('\n'.join([str(exception), '', 'Flash firmware'
-                                           ' version %s?' %
-                                           exception.device.device_version]))
+
+                # Check if base minor versions match (e.g., `1.53rc0` and
+                # `1.53rc1`; `1.53.0` and `1.53.1`).
+                try:
+                    versions = [semantic_version.Version(pkg_resources
+                                                         .parse_version(v)
+                                                         .base_version,
+                                                         partial=True)
+                                for v in (exception.device_version,
+                                          db.__version__)]
+                except Exception as e:
+                    versions = []
+                    gobject.idle_add(_L().warning, str(e))
+
+                if len(set([(v.major, v.minor) for v in versions])) == 1:
+                    # Base minor versions are *equal*.  Assume API is backwards
+                    # compatible and attempt to connect.
+                    _attempt_connect(ignore=[bnr.proxy.DeviceVersionMismatch])
+                else:
+                    _offer_to_flash('\n'.join([str(exception), '', 'Flash '
+                                               'firmware version %s?' %
+                                               exception.device_version]))
             except bnr.proxy.DeviceNotFound as exception:
                 # Cases:
                 #
