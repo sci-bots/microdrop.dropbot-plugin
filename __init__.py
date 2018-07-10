@@ -33,6 +33,7 @@ import uuid
 import warnings
 import webbrowser
 
+from dropbot import EVENT_ENABLE, EVENT_CHANNELS_UPDATED
 from flatland import Integer, Float, Form, Boolean
 from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
@@ -513,6 +514,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             .. versionchanged:: X.X.X
                 Connect to the ``output_enabled`` and ``output_disabled``
                 DropBot signals to update the chip insertion status.
+
+                Configure :attr:`control_board.state.event_mask` to enable
+                ``channels-updated`` events.
             '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
@@ -556,7 +560,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # every 100 ms.
             app_values = self.get_app_values()
             self.control_board.update_state(capacitance_update_interval_ms=
-                                            app_values['c_update_ms'])
+                                            app_values['c_update_ms'],
+                                            event_mask=EVENT_CHANNELS_UPDATED |
+                                            EVENT_ENABLE)
             _L().info('connected capacitance updated signal callback')
 
             self.device_time_sync = {'host': dt.datetime.utcnow(),
