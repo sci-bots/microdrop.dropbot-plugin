@@ -537,13 +537,19 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                          gtk_threadsafe(self.emit)('chip-removed'),
                          weak=False)
 
+            capacitance_update_status = {'time': time.time()}
+
             # Update cached device load capacitance each time the
             # `'capacitance-updated'` signal is emitted from the DropBot.
             def _on_capacitance_updated(message):
                 if 'V_a' in message:
                     self.actuation_voltage = message['V_a']
                 self.device_load_capacitance = message['new_value']
-                self.on_device_capacitance_update(message['new_value'])
+                now = time.time()
+                if now - capacitance_update_status['time'] > .2:
+                    self.on_device_capacitance_update(message['new_value'])
+                    capacitance_update_status['time'] = now
+
             (self.control_board.signals.signal('capacitance-updated')
              .connect(_on_capacitance_updated, weak=False))
             # Request for the DropBot to measure the device load capacitance
