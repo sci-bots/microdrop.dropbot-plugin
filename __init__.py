@@ -456,6 +456,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         #: .. versionadded:: 2.26
         self._state_applied = threading.Event()
 
+        self._channel_states_received = threading.Event()
+
         #: .. versionadded:: 2.24
         self.device_time_sync = {}
 
@@ -809,10 +811,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             logging.info('self.channel_states: %s', self.channel_states)
             logging.info('', exc_info=True)
         else:
-            app = get_app()
-            if self.dropbot_connected.is_set() and (app.realtime_mode or
-                                                    app.running):
+            self._channel_states_received.channel_states = \
+                self.channel_states.copy()
+            if self._channel_states_received.is_set():
                 self.on_step_run()
+            else:
+                self._channel_states_received.set()
 
     def cleanup_plugin(self):
         '''
@@ -1607,6 +1611,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self._step_capacitances.append(message)
 
     def complete_step(self, return_value=None):
+        self._channel_states_received.clear()
         self.timeout_id = None
         app = get_app()
         if app.running or app.realtime_mode:
@@ -1629,6 +1634,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: 2.26
             Clear :attr:`_state_applied` event.
+
+        .. versionchanged:: X.X.X
+            Clear :attr:`_channel_states_received` event.
         '''
         self._step_thread = None
         self._state_applied.clear()
