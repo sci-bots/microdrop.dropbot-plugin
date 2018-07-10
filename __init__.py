@@ -29,6 +29,7 @@ import thread
 import threading
 import time
 import types
+import uuid
 import warnings
 import webbrowser
 
@@ -1364,6 +1365,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         self._kill_running_step()
         self.step_cancelled.clear()
+        self._step_uuid = uuid.uuid5(uuid.uuid1(), 'dropbot_plugin')
         self._step_thread = threading.Thread(target=self._step_run_handler)
         self._step_thread.daemon = True
         self._step_thread.start()
@@ -1420,6 +1422,26 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.complete_step()
             return
 
+        gtk_threadsafe(self._execute_step)()
+
+    def _delay_completion(self, duration_s):
+        step_uuid = self._step_uuid
+
+        def _wait_for_cancelled():
+            if self.step_cancelled.wait(duration_s):
+                self.step_cancelled.clear()
+                # Step was cancelled.
+                _L().info('Step was cancelled.')
+                self._kill_running_step()
+            elif step_uuid == self._step_uuid:
+                _L().info('Complete step after %ss', si.si_format(duration_s))
+                self.complete_step()
+
+        thread = threading.Thread(target=_wait_for_cancelled)
+        thread.daemon = True
+        thread.start()
+
+    def _execute_step(self):
         # Clear step cancelled signal.
         self.step_cancelled.clear()
         app = get_app()
@@ -1451,8 +1473,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     gtk_threadsafe(self.complete_step)()
                 else:
                     # DropBot is not connected.  Delay for specified duration.
-                    self.timeout_id = gobject.timeout_add(options['duration'],
-                                                          self.complete_step)
+                    self._delay_completion(options['duration'] * 1e-3)
             elif all(threshold_criteria):
                 # A volume threshold has been set for this step.
 
@@ -1551,8 +1572,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.capacitance_watch_thread.start()
             else:
                 _L().info('actuated area: %s mm^2', self.actuated_area)
-                self.timeout_id = gobject.timeout_add(options['duration'],
-                                                      self.complete_step)
+                self._delay_completion(options['duration'] * 1e-3)
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def log_capacitance_updates(self, capacitance_updates):
