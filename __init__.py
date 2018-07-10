@@ -82,7 +82,8 @@ del get_versions
 
 # Reduce logging from `debounce` library.
 for _ in ("debounce.%s" % i for i in ('setTimeout', 'shouldInvoke',
-                                      'timerExpired')):
+                                      'timerExpired', 'trailingEdge',
+                                      'invokeFunc')):
     logging.getLogger(_).setLevel(logging.CRITICAL)
 
 # Prevent warning about potential future changes to Numpy scalar encoding
