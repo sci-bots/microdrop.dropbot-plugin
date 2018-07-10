@@ -1445,9 +1445,14 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                   app_values['c_liquid'] > 0]
 
             if not self.dropbot_connected.is_set():
-                # DropBot is not connected.  Delay for specified duration.
-                self.timeout_id = gobject.timeout_add(options['duration'],
-                                                      self.complete_step)
+                if options['volume_threshold'] > 0:
+                    # Volume threshold is set.  Treat `duration` as maximum
+                    # duration and continue immediately.
+                    gtk_threadsafe(self.complete_step)()
+                else:
+                    # DropBot is not connected.  Delay for specified duration.
+                    self.timeout_id = gobject.timeout_add(options['duration'],
+                                                          self.complete_step)
             elif all(threshold_criteria):
                 # A volume threshold has been set for this step.
 
