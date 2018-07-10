@@ -1596,7 +1596,14 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # stored in `timestamp_utc`.
         df.drop(['start', 'end'], axis=1, inplace=True)
 
-        with gzip.open(csv_output_path, 'a', compresslevel=9) as output:
+        # Use `compresslevel=1` to prioritize compression speed while still
+        # significantly reducing the output file size compared to no
+        # compression.
+        #
+        # See [here][1] for some supporting motivation.
+        #
+        # [1]: https://github.com/gruntjs/grunt-contrib-compress/issues/116#issuecomment-70883022
+        with gzip.open(csv_output_path, 'a', compresslevel=1) as output:
             df.to_csv(output, index=False, header=include_header)
 
     def _on_step_capacitance_updated(self, message):
