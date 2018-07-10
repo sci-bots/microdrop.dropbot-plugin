@@ -1353,6 +1353,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         logger.info('connected capacitance updated signal callback')
 
     def on_step_run(self):
+        '''
+        .. versionchanged:: X.X.X
+            Execute step in a separate thread.  This allows GTK events and step
+            handling of other plugins to execute concurrently.
+        '''
+        self._kill_running_step()
+        self.step_cancelled.clear()
+        self._step_thread = threading.Thread(target=self._step_run_handler)
+        self._step_thread.daemon = True
+        self._step_thread.start()
+
+    def _step_run_handler(self):
         """
         Handler called whenever a step is executed.
 
@@ -1389,8 +1401,20 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Require **5 consecutive** capacitance updates above the target
             threshold to trigger step completion.  This increases confidence
             that the target capacitance has actually been met.
+
+        .. versionchanged:: X.X.X
+            Execute step in a separate thread.  This allows GTK events and step
+            handling of other plugins to execute concurrently.
+        '''
         """
-        self._kill_running_step()
+        event = or_event.OrEvent(self.step_cancelled,
+                                 self._channel_states_received)
+        # Wait for channel states to be received.
+        event.wait()
+
+        if self.step_cancelled.is_set():
+            self.complete_step()
+            return
 
         # Clear step cancelled signal.
         self.step_cancelled.clear()
@@ -1406,7 +1430,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         if not app.running:
             # Protocol is not running so do not apply capacitance threshold or
             # duration.
-            self.complete_step()
+            gtk_threadsafe(self.complete_step)()
         else:
             options = self.get_step_options()
             app_values = self.get_app_values()
@@ -1606,6 +1630,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.26
             Clear :attr:`_state_applied` event.
         '''
+        self._step_thread = None
         self._state_applied.clear()
         if self.timeout_id:
             _L().debug('remove timeout_id=%d', self.timeout_id)
