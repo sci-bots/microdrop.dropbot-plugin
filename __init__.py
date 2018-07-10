@@ -1359,19 +1359,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def on_step_run(self):
         '''
-        .. versionchanged:: X.X.X
-            Execute step in a separate thread.  This allows GTK events and step
-            handling of other plugins to execute concurrently.
-        '''
-        self._kill_running_step()
-        self.step_cancelled.clear()
-        self._step_uuid = uuid.uuid5(uuid.uuid1(), 'dropbot_plugin')
-        self._step_thread = threading.Thread(target=self._step_run_handler)
-        self._step_thread.daemon = True
-        self._step_thread.start()
-
-    def _step_run_handler(self):
-        """
         Handler called whenever a step is executed.
 
         Plugins that handle this signal must emit the on_step_complete
@@ -1409,39 +1396,58 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             that the target capacitance has actually been met.
 
         .. versionchanged:: X.X.X
-            Execute step in a separate thread.  This allows GTK events and step
-            handling of other plugins to execute concurrently.
+            Wait in separate thread for channel states to be applied. This
+            allows GTK events and step handling of other plugins to execute
+            concurrently.
         '''
-        """
-        event = or_event.OrEvent(self.step_cancelled,
-                                 self._channel_states_received)
-        # Wait for channel states to be received.
-        event.wait()
+        self._kill_running_step()
+        self.step_cancelled.clear()
+        self._step_uuid = uuid.uuid5(uuid.uuid1(), 'dropbot_plugin')
 
-        if self.step_cancelled.is_set():
-            self.complete_step()
-            return
+        def _wait_for_channel_states():
+            event = or_event.OrEvent(self.step_cancelled,
+                                     self._channel_states_received)
+            # Wait for channel states to be received.
+            event.wait()
 
-        gtk_threadsafe(self._execute_step)()
-
-    def _delay_completion(self, duration_s):
-        step_uuid = self._step_uuid
-
-        def _wait_for_cancelled():
-            if self.step_cancelled.wait(duration_s):
-                self.step_cancelled.clear()
-                # Step was cancelled.
-                _L().info('Step was cancelled.')
-                self._kill_running_step()
-            elif step_uuid == self._step_uuid:
-                _L().info('Complete step after %ss', si.si_format(duration_s))
+            if self.step_cancelled.is_set():
                 self.complete_step()
+            else:
+                # Channel states have been received.  Execute step.
+                gtk_threadsafe(self._execute_step)()
 
-        thread = threading.Thread(target=_wait_for_cancelled)
+        thread = threading.Thread(target=_wait_for_channel_states)
         thread.daemon = True
         thread.start()
 
+    @gtk_threadsafe
     def _execute_step(self):
+        '''
+        Execute step only after channel states have been received.
+
+        .. versionadded:: X.X.X
+        '''
+        def _delay_completion(duration_s):
+            '''
+            Delay until either a) specified duration has passed; or b) step has
+            been cancelled.
+            '''
+            step_uuid = self._step_uuid
+
+            def _wait_for_cancelled():
+                if self.step_cancelled.wait(duration_s):
+                    self.step_cancelled.clear()
+                    # Step was cancelled.
+                    _L().info('Step was cancelled.')
+                    self._kill_running_step()
+                elif step_uuid == self._step_uuid:
+                    _L().info('Complete step after %ss', si.si_format(duration_s))
+                    self.complete_step()
+
+            thread = threading.Thread(target=_wait_for_cancelled)
+            thread.daemon = True
+            thread.start()
+
         # Clear step cancelled signal.
         self.step_cancelled.clear()
         app = get_app()
@@ -1456,7 +1462,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         if not app.running:
             # Protocol is not running so do not apply capacitance threshold or
             # duration.
-            gtk_threadsafe(self.complete_step)()
+            self.complete_step()
         else:
             options = self.get_step_options()
             app_values = self.get_app_values()
@@ -1470,10 +1476,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 if options['volume_threshold'] > 0:
                     # Volume threshold is set.  Treat `duration` as maximum
                     # duration and continue immediately.
-                    gtk_threadsafe(self.complete_step)()
+                    self.complete_step()
                 else:
                     # DropBot is not connected.  Delay for specified duration.
-                    self._delay_completion(options['duration'] * 1e-3)
+                    _delay_completion(options['duration'] * 1e-3)
             elif all(threshold_criteria):
                 # A volume threshold has been set for this step.
 
@@ -1496,7 +1502,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     # reached in the log message.
                     _L().warn('Timed out waiting for DropBot to apply '
                               'requested settings.')
-                    gtk_threadsafe(self.complete_step)('Fail')
+                    self.complete_step('Fail')
                     return
 
                 def _wait_for_target_capacitance():
@@ -1572,7 +1578,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.capacitance_watch_thread.start()
             else:
                 _L().info('actuated area: %s mm^2', self.actuated_area)
-                self._delay_completion(options['duration'] * 1e-3)
+                _delay_completion(options['duration'] * 1e-3)
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def log_capacitance_updates(self, capacitance_updates):
