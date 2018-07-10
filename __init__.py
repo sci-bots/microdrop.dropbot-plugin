@@ -1237,10 +1237,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         .. versionadded:: 0.18
         '''
-        a = self.actuated_area
         if not self.dropbot_connected.is_set():
             _L().error('DropBot is not connected.')
-        elif a == 0:
+        elif self.actuated_area == 0:
             _L().error('At least one electrode must be actuated to perform '
                        'calibration.')
         else:
@@ -1268,9 +1267,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.control_board.set_state_of_channels(channel_states)
             c = self.control_board.measure_capacitance()
             _L().info("on_measure_%s_capacitance: {}F/%.1f mm^2 = {}F/mm^2",
-                      name, si.si_format(c), a, si.si_format(c / a))
+                      name, si.si_format(c), self.actuated_area,
+                      si.si_format(c / self.actuated_area))
             app_values = {}
-            app_values['c_%s' % name] = c / a
+            app_values['c_%s' % name] = c / self.actuated_area
             self.set_app_values(app_values)
 
             # send a signal to update the gui
