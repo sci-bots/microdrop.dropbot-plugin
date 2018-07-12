@@ -512,7 +512,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 to ``INFO`` level when ``channels-updated`` DropBot event is
                 received.
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.27
                 Connect to the ``output_enabled`` and ``output_disabled``
                 DropBot signals to update the chip insertion status.
 
@@ -997,7 +997,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Attempt connection to DropBot.
 
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.27
                 Ignore mismatch between DropBot driver and firmware versions as
                 long as base minor versions are equal, i.e., assume API is
                 backwards compatible.
@@ -1377,7 +1377,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             threshold to trigger step completion.  This increases confidence
             that the target capacitance has actually been met.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.27
             Wait in separate thread for channel states to be applied. This
             allows GTK events and step handling of other plugins to execute
             concurrently.
@@ -1407,7 +1407,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         Execute step only after channel states have been received.
 
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.27
         '''
         def _delay_completion(duration_s):
             '''
@@ -1655,7 +1655,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.26
             Clear :attr:`_state_applied` event.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.27
             Clear :attr:`_channel_states_received` event.
         '''
         self._step_thread = None

@@ -23,13 +23,13 @@ requirements:
     #: .. versionchanged:: 2.24
     #: .. versionchanged:: 2.25
     #: .. versionchanged:: 2.26
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.27
     - dropbot >=1.53
     - flatland-fork
     - json-tricks >=3.8.0
-    #: .. versionadded:: X.X.X
+    #: .. versionadded:: 2.27
     - logging-helpers >=0.4
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.27
     - microdrop >=2.23
     - microdrop-plugin-template
     - microdrop-plugin-manager >=0.14
@@ -41,7 +41,7 @@ requirements:
     - pip-helpers
     - pytables
     - pyyaml
-    #: .. versionadded:: X.X.X
+    #: .. versionadded:: 2.27
     - semantic_version
     #: .. versionadded:: 2.24
     - si-prefix
@@ -55,13 +55,13 @@ requirements:
     #: .. versionchanged:: 2.24
     #: .. versionchanged:: 2.25
     #: .. versionchanged:: 2.26
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.27
     - dropbot >=1.53
     - flatland-fork
     - json-tricks >=3.8.0
-    #: .. versionadded:: X.X.X
+    #: .. versionadded:: 2.27
     - logging-helpers >=0.4
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.27
     - microdrop >=2.23
     - microdrop-plugin-template
     - microdrop-utility
@@ -72,7 +72,7 @@ requirements:
     - pip-helpers
     - pytables
     - pyyaml
-    #: .. versionadded:: X.X.X
+    #: .. versionadded:: 2.27
     - semantic_version
     #: .. versionadded:: 2.24
     - si-prefix
