@@ -27,6 +27,8 @@ requirements:
     - dropbot >=1.53
     - flatland-fork
     - json-tricks >=3.8.0
+    #: .. versionadded:: X.X.X
+    - logging-helpers >=0.4
     #: .. versionchanged:: X.X.X
     - microdrop >=2.23
     - microdrop-plugin-template
@@ -57,6 +59,8 @@ requirements:
     - dropbot >=1.53
     - flatland-fork
     - json-tricks >=3.8.0
+    #: .. versionadded:: X.X.X
+    - logging-helpers >=0.4
     #: .. versionchanged:: X.X.X
     - microdrop >=2.23
     - microdrop-plugin-template
