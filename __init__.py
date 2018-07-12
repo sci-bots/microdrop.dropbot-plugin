@@ -674,15 +674,27 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: 0.16
             Prompt user to insert DropBot test board.
+
+        .. versionchanged:: X.X.X
+            Generate a self-contained HTML report with JSON report results
+            included in a ``<script id="results">...</script>`` tag.
         '''
         results = db.self_test.self_test(self.control_board)
+        # Test has completed, now:
+        #
+        #  1. Write raw JSON results to `.dropbot-diagnostics` directory in
+        #     current working directory.
+        #  2. Write HTML report to `.dropbot-diagnostics` directory in current
+        #     working directory (with raw JSON results embedded in a
+        #     `<script id="results" .../> tag).
+        #  3. Launch HTML report in web browser.
         results_dir = ph.path(self.diagnostics_results_dir)
         results_dir.makedirs_p()
 
         # Create unique output filenames based on current timestamp.
         timestamp = dt.datetime.now().isoformat().replace(':', '_')
         json_path = results_dir.joinpath('results-%s.json' % timestamp)
-        report_path = results_dir.joinpath('results-%s.docx' % timestamp)
+        report_path = results_dir.joinpath('results-%s.html' % timestamp)
 
         # Write test results encoded as JSON.
         with json_path.open('w') as output:
@@ -692,10 +704,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
             output.write(json_tricks.dumps(results, indent=4))
 
-        # Generate test result summary report as Word document.
+        # Generate test result summary report as HTML document.
         db.self_test.generate_report(results, output_path=report_path,
                                      force=True)
-        # Launch Word document report.
+        # Launch HTML report.
         report_path.launch()
 
     def create_ui(self):
