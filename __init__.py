@@ -676,11 +676,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 0.16
             Prompt user to insert DropBot test board.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.28
             Generate a self-contained HTML report with JSON report results
             included in a ``<script id="results">...</script>`` tag.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.28
             Display a progress dialog while the test is running.
         '''
         gtk.gdk.threads_init()
