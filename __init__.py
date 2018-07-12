@@ -23,14 +23,17 @@ import datetime as dt
 import gzip
 import json
 import logging
+import pkg_resources
 import re
 import thread
 import threading
 import time
 import types
+import uuid
 import warnings
 import webbrowser
 
+from dropbot import EVENT_ENABLE, EVENT_CHANNELS_UPDATED
 from flatland import Integer, Float, Form, Boolean
 from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
@@ -66,6 +69,7 @@ import numpy as np
 import or_event
 import pandas as pd
 import path_helpers as ph
+import semantic_version
 import si_prefix as si
 import tables
 import zmq
@@ -78,7 +82,8 @@ del get_versions
 
 # Reduce logging from `debounce` library.
 for _ in ("debounce.%s" % i for i in ('setTimeout', 'shouldInvoke',
-                                      'timerExpired')):
+                                      'timerExpired', 'trailingEdge',
+                                      'invokeFunc')):
     logging.getLogger(_).setLevel(logging.CRITICAL)
 
 # Prevent warning about potential future changes to Numpy scalar encoding
@@ -454,6 +459,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         #: .. versionadded:: 2.26
         self._state_applied = threading.Event()
 
+        self._channel_states_received = threading.Event()
+
         #: .. versionadded:: 2.24
         self.device_time_sync = {}
 
@@ -504,6 +511,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 Set :attr:`_state_applied` event and log actuated channels/area
                 to ``INFO`` level when ``channels-updated`` DropBot event is
                 received.
+
+            .. versionchanged:: 2.27
+                Connect to the ``output_enabled`` and ``output_disabled``
+                DropBot signals to update the chip insertion status.
+
+                Configure :attr:`control_board.state.event_mask` to enable
+                ``channels-updated`` events.
             '''
             # Set event indicating DropBot has been connected.
             self.dropbot_connected.set()
@@ -518,20 +532,38 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             else:
                 self.emit('chip-inserted')
 
+            # Connect to DropBot signals to monitor chip insertion status.
+            self.control_board.signals.signal('output_enabled')\
+                .connect(lambda message:
+                         gtk_threadsafe(self.emit)('chip-inserted'),
+                         weak=False)
+            self.control_board.signals.signal('output_disabled')\
+                .connect(lambda message:
+                         gtk_threadsafe(self.emit)('chip-removed'),
+                         weak=False)
+
+            capacitance_update_status = {'time': time.time()}
+
             # Update cached device load capacitance each time the
             # `'capacitance-updated'` signal is emitted from the DropBot.
             def _on_capacitance_updated(message):
                 if 'V_a' in message:
                     self.actuation_voltage = message['V_a']
                 self.device_load_capacitance = message['new_value']
-                self.on_device_capacitance_update(message['new_value'])
+                now = time.time()
+                if now - capacitance_update_status['time'] > .2:
+                    self.on_device_capacitance_update(message['new_value'])
+                    capacitance_update_status['time'] = now
+
             (self.control_board.signals.signal('capacitance-updated')
              .connect(_on_capacitance_updated, weak=False))
             # Request for the DropBot to measure the device load capacitance
             # every 100 ms.
             app_values = self.get_app_values()
             self.control_board.update_state(capacitance_update_interval_ms=
-                                            app_values['c_update_ms'])
+                                            app_values['c_update_ms'],
+                                            event_mask=EVENT_CHANNELS_UPDATED |
+                                            EVENT_ENABLE)
             _L().info('connected capacitance updated signal callback')
 
             self.device_time_sync = {'host': dt.datetime.utcnow(),
@@ -807,10 +839,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             logging.info('self.channel_states: %s', self.channel_states)
             logging.info('', exc_info=True)
         else:
-            app = get_app()
-            if self.dropbot_connected.is_set() and (app.realtime_mode or
-                                                    app.running):
+            self._channel_states_received.channel_states = \
+                self.channel_states.copy()
+            if self._channel_states_received.is_set():
                 self.on_step_run()
+            else:
+                self._channel_states_received.set()
 
     def cleanup_plugin(self):
         '''
@@ -862,51 +896,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         if get_app().protocol:
             self.on_step_run()
             self._update_protocol_grid()
-
-        def _watch_for_chip():
-            '''
-            Watch for DropBot device notification for DMF chip
-            insertion/removal.
-
-            Translate incoming events to g-signal events so GUI code may
-            respond to events where necessary.
-
-            .. versionchanged:: 2.22.5
-                Gracefully handle scenario where control board disconnects
-                after loop iteration has started, but before the reference to
-                the `queues` control board attribute is resolved.
-            '''
-            # Wait for DropBot to connect.
-            while self.dropbot_connected.wait():
-                # DropBot is connected, so check for incoming events on stream
-                # queue.
-                try:
-                    timestamp, packet = (self.control_board.queues.stream
-                                         .get(block=True, timeout=.1))
-                    message = json.loads(packet.data())
-
-                    event = message.get('event')
-                    if event == 'output_enabled':
-                        gobject.idle_add(self.emit, 'chip-inserted')
-                    elif event == 'output_disabled':
-                        gobject.idle_add(self.emit, 'chip-removed')
-                except Queue.Empty:
-                    pass
-                except ValueError:
-                    pass
-                except AttributeError as exception:
-                    if str(exception).strip().endswith("no attribute 'queues'"):
-                        # `self.control_board` is `None` (i.e., DropBot
-                        # disconnected).
-                        continue
-                    else:
-                        raise
-
-        if self.chip_watch_thread is None:
-            self.chip_watch_thread = threading.Thread(target=_watch_for_chip)
-            # Stop when main thread exits.
-            self.chip_watch_thread.daemon = True
-            self.chip_watch_thread.start()
 
     def on_plugin_disable(self):
         self.cleanup_plugin()
@@ -1006,6 +995,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             .. versionadded:: 0.22
 
             Attempt connection to DropBot.
+
+
+            .. versionchanged:: 2.27
+                Ignore mismatch between DropBot driver and firmware versions as
+                long as base minor versions are equal, i.e., assume API is
+                backwards compatible.
             '''
             try:
                 self.control_board = db.SerialProxy(**kwargs)
@@ -1016,9 +1011,28 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             except bnr.proxy.DeviceVersionMismatch as exception:
                 # DropBot device software version does not match host software
                 # version.
-                _offer_to_flash('\n'.join([str(exception), '', 'Flash firmware'
-                                           ' version %s?' %
-                                           exception.device.device_version]))
+
+                # Check if base minor versions match (e.g., `1.53rc0` and
+                # `1.53rc1`; `1.53.0` and `1.53.1`).
+                try:
+                    versions = [semantic_version.Version(pkg_resources
+                                                         .parse_version(v)
+                                                         .base_version,
+                                                         partial=True)
+                                for v in (exception.device_version,
+                                          db.__version__)]
+                except Exception as e:
+                    versions = []
+                    gobject.idle_add(_L().warning, str(e))
+
+                if len(set([(v.major, v.minor) for v in versions])) == 1:
+                    # Base minor versions are *equal*.  Assume API is backwards
+                    # compatible and attempt to connect.
+                    _attempt_connect(ignore=[bnr.proxy.DeviceVersionMismatch])
+                else:
+                    _offer_to_flash('\n'.join([str(exception), '', 'Flash '
+                                               'firmware version %s?' %
+                                               exception.device_version]))
             except bnr.proxy.DeviceNotFound as exception:
                 # Cases:
                 #
@@ -1223,10 +1237,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         .. versionadded:: 0.18
         '''
-        a = self.actuated_area
         if not self.dropbot_connected.is_set():
             _L().error('DropBot is not connected.')
-        elif a == 0:
+        elif self.actuated_area == 0:
             _L().error('At least one electrode must be actuated to perform '
                        'calibration.')
         else:
@@ -1254,9 +1267,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.control_board.set_state_of_channels(channel_states)
             c = self.control_board.measure_capacitance()
             _L().info("on_measure_%s_capacitance: {}F/%.1f mm^2 = {}F/mm^2",
-                      name, si.si_format(c), a, si.si_format(c / a))
+                      name, si.si_format(c), self.actuated_area,
+                      si.si_format(c / self.actuated_area))
             app_values = {}
-            app_values['c_%s' % name] = c / a
+            app_values['c_%s' % name] = c / self.actuated_area
             self.set_app_values(app_values)
 
             # send a signal to update the gui
@@ -1326,7 +1340,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         logger.info('connected capacitance updated signal callback')
 
     def on_step_run(self):
-        """
+        '''
         Handler called whenever a step is executed.
 
         Plugins that handle this signal must emit the on_step_complete
@@ -1362,8 +1376,59 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Require **5 consecutive** capacitance updates above the target
             threshold to trigger step completion.  This increases confidence
             that the target capacitance has actually been met.
-        """
+
+        .. versionchanged:: 2.27
+            Wait in separate thread for channel states to be applied. This
+            allows GTK events and step handling of other plugins to execute
+            concurrently.
+        '''
         self._kill_running_step()
+        self.step_cancelled.clear()
+        self._step_uuid = uuid.uuid5(uuid.uuid1(), 'dropbot_plugin')
+
+        def _wait_for_channel_states():
+            event = or_event.OrEvent(self.step_cancelled,
+                                     self._channel_states_received)
+            # Wait for channel states to be received.
+            event.wait()
+
+            if self.step_cancelled.is_set():
+                self.complete_step()
+            else:
+                # Channel states have been received.  Execute step.
+                gtk_threadsafe(self._execute_step)()
+
+        thread = threading.Thread(target=_wait_for_channel_states)
+        thread.daemon = True
+        thread.start()
+
+    @gtk_threadsafe
+    def _execute_step(self):
+        '''
+        Execute step only after channel states have been received.
+
+        .. versionadded:: 2.27
+        '''
+        def _delay_completion(duration_s):
+            '''
+            Delay until either a) specified duration has passed; or b) step has
+            been cancelled.
+            '''
+            step_uuid = self._step_uuid
+
+            def _wait_for_cancelled():
+                if self.step_cancelled.wait(duration_s):
+                    self.step_cancelled.clear()
+                    # Step was cancelled.
+                    _L().info('Step was cancelled.')
+                    self._kill_running_step()
+                elif step_uuid == self._step_uuid:
+                    _L().info('Complete step after %ss', si.si_format(duration_s))
+                    self.complete_step()
+
+            thread = threading.Thread(target=_wait_for_cancelled)
+            thread.daemon = True
+            thread.start()
 
         # Clear step cancelled signal.
         self.step_cancelled.clear()
@@ -1390,9 +1455,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                   app_values['c_liquid'] > 0]
 
             if not self.dropbot_connected.is_set():
-                # DropBot is not connected.  Delay for specified duration.
-                self.timeout_id = gobject.timeout_add(options['duration'],
-                                                      self.complete_step)
+                if options['volume_threshold'] > 0:
+                    # Volume threshold is set.  Treat `duration` as maximum
+                    # duration and continue immediately.
+                    self.complete_step()
+                else:
+                    # DropBot is not connected.  Delay for specified duration.
+                    _delay_completion(options['duration'] * 1e-3)
             elif all(threshold_criteria):
                 # A volume threshold has been set for this step.
 
@@ -1415,7 +1484,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     # reached in the log message.
                     _L().warn('Timed out waiting for DropBot to apply '
                               'requested settings.')
-                    gtk_threadsafe(self.complete_step)('Fail')
+                    self.complete_step('Fail')
                     return
 
                 def _wait_for_target_capacitance():
@@ -1491,8 +1560,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.capacitance_watch_thread.start()
             else:
                 _L().info('actuated area: %s mm^2', self.actuated_area)
-                self.timeout_id = gobject.timeout_add(options['duration'],
-                                                      self.complete_step)
+                _delay_completion(options['duration'] * 1e-3)
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def log_capacitance_updates(self, capacitance_updates):
@@ -1536,7 +1604,14 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # stored in `timestamp_utc`.
         df.drop(['start', 'end'], axis=1, inplace=True)
 
-        with gzip.open(csv_output_path, 'a', compresslevel=9) as output:
+        # Use `compresslevel=1` to prioritize compression speed while still
+        # significantly reducing the output file size compared to no
+        # compression.
+        #
+        # See [here][1] for some supporting motivation.
+        #
+        # [1]: https://github.com/gruntjs/grunt-contrib-compress/issues/116#issuecomment-70883022
+        with gzip.open(csv_output_path, 'a', compresslevel=1) as output:
             df.to_csv(output, index=False, header=include_header)
 
     def _on_step_capacitance_updated(self, message):
@@ -1556,6 +1631,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self._step_capacitances.append(message)
 
     def complete_step(self, return_value=None):
+        self._channel_states_received.clear()
         self.timeout_id = None
         app = get_app()
         if app.running or app.realtime_mode:
@@ -1578,7 +1654,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: 2.26
             Clear :attr:`_state_applied` event.
+
+        .. versionchanged:: 2.27
+            Clear :attr:`_channel_states_received` event.
         '''
+        self._step_thread = None
         self._state_applied.clear()
         if self.timeout_id:
             _L().debug('remove timeout_id=%d', self.timeout_id)
