@@ -670,6 +670,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         Record test results as JSON and results summary as a Word document.
 
+
         .. versionadded:: 0.14
 
         .. versionchanged:: 0.16
@@ -678,8 +679,80 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: X.X.X
             Generate a self-contained HTML report with JSON report results
             included in a ``<script id="results">...</script>`` tag.
+
+        .. versionchanged:: X.X.X
+            Display a progress dialog while the test is running.
         '''
-        results = db.self_test.self_test(self.control_board)
+        gtk.gdk.threads_init()
+
+        dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK,
+                                   flags=gtk.DIALOG_MODAL |
+                                   gtk.DIALOG_DESTROY_WITH_PARENT)
+        dialog.props.text = ('Running DropBot diagnostic self tests.\n\nThis '
+                             'may take ~35 seconds to complete.  Please '
+                             'wait...')
+        dialog.set_title('DropBot self tests')
+        dialog.props.destroy_with_parent = True
+        dialog.props.window_position = gtk.WIN_POS_MOUSE
+        # Disable `X` window close button.
+        dialog.props.deletable = False
+        content_area = dialog.get_content_area()
+        progress = gtk.ProgressBar()
+        content_area.pack_start(progress, fill=True, expand=True, padding=5)
+        progress.props.can_focus = True
+        progress.props.has_focus = True
+        # Disable `OK` button until test has completed.
+        dialog.get_action_area().props.sensitive = False
+        content_area.show_all()
+
+        # Need three active threads:
+        #
+        #  1. Main GTK thread calling this function, which will block when
+        #     dialog is run/shown.
+        #  2. DropBot self-test thread, which will block until test is
+        #     complete.
+        #  3. Progress update thread to refresh dialog progress bar while test
+        #     is running and enable `OK` button once test has completed.
+
+        # Set once DropBot self tests have completed.
+        tests_completed = threading.Event()
+
+        results = {}
+
+        def _run_test():
+            results_ = db.self_test.self_test(self.control_board)
+            results.update(results_)
+            tests_completed.set()
+
+        def _update_progress():
+            start = time.time()
+            while not tests_completed.wait(1. / 5):
+                # Update progress bar.
+                gtk_threadsafe(progress.pulse)()
+                gtk_threadsafe(progress.set_text)('Duration: %.0f s' %
+                                                  (time.time() - start))
+
+            # Test has completed.
+            @gtk_threadsafe
+            def _finish_dialog():
+                progress.props.fraction = 1
+                dialog.get_action_area().props.sensitive = True
+                dialog.get_action_area().get_children()[0].props.has_focus = True
+                progress.props.text = ('Completed after %.0f s. Click OK to '
+                                       'open results in browser.' %
+                                       (time.time() - start))
+            _finish_dialog()
+
+        for func_i in (_update_progress, _run_test):
+            thread_i = threading.Thread(target=func_i)
+            thread_i.daemon = True
+            thread_i.start()
+
+        # Launch dialog to show test activity and wait until test has
+        # completed.
+        dialog.run()
+        dialog.destroy()
+
         # Test has completed, now:
         #
         #  1. Write raw JSON results to `.dropbot-diagnostics` directory in
