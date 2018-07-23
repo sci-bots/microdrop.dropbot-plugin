@@ -689,7 +689,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                    flags=gtk.DIALOG_MODAL |
                                    gtk.DIALOG_DESTROY_WITH_PARENT)
         dialog.props.text = ('Running DropBot diagnostic self tests.\n\nThis '
-                             'may take ~35 seconds to complete.  Please '
+                             'may take up to a minute to complete.  Please '
                              'wait...')
         dialog.set_title('DropBot self tests')
         dialog.props.destroy_with_parent = True
