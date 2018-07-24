@@ -687,6 +687,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.emit('chip-removed')
             else:
                 self.emit('chip-inserted')
+                gtk_threadsafe(lambda: self.control_board.detect_shorts(5) and
+                               False)()
 
             self.device_time_sync = {'host': dt.datetime.utcnow(),
                                      'device_us':
