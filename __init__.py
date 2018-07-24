@@ -434,7 +434,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             calling the function more than once.
 
         .. versionchanged:: X.X.X
-            Push connection status changes to statusbar.
+            Push changes to connection status and actuation area to statusbar.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -553,8 +553,15 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     self.actuated_area = actuated_areas.sum()
                 else:
                     self.actuated_area = 0
-                _L().info('actuated electrodes: %s (%s mm^2)',
-                          self.actuated_channels, self.actuated_area)
+                # m^2 area
+                area = self.actuated_area * (1e-3 ** 2)
+                # Approximate area in SI units.
+                value, pow10 = si.split(np.sqrt(area))
+                si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 + pow10 / 3]
+                status = ('actuated electrodes: %s (%.1f %sm^2)' %
+                          (self.actuated_channels, value ** 2, si_unit))
+                self.push_status(status, None, True)
+                _L().info(status)
                 self._state_applied.set()
 
             (self.control_board.signals.signal('channels-updated')
