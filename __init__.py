@@ -651,6 +651,53 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         self.connect('dropbot-disconnected', _on_dropbot_disconnected)
 
+    @gtk_threadsafe
+    def clear_status(self):
+        '''
+        Clear statusbar context for this plugin.
+
+
+        .. versionadded:: X.X.X
+        '''
+        app = get_app()
+        statusbar = app.builder.get_object('statusbar')
+        context_id = statusbar.get_context_id(self.name)
+
+        statusbar.remove_all(context_id)
+
+    @gtk_threadsafe
+    def push_status(self, status, hide_timeout_s=3, clear=True):
+        '''
+        Push status message to statusbar context for this plugin.
+
+        Parameters
+        ----------
+        status : str
+            Status message.
+        hide_timeout_s : float, optional
+            Number of seconds to display message before hiding.  If `None`, do
+            not hide.
+        clear : bool, optional
+            Clear existing statusbar stack before pushing new status.
+
+
+        .. versionadded:: X.X.X
+        '''
+        app = get_app()
+        statusbar = app.builder.get_object('statusbar')
+        context_id = statusbar.get_context_id(self.name)
+
+        if clear:
+            statusbar.remove_all(context_id)
+
+        message_id = statusbar.push(context_id, '[%s] %s' % (self.name, status))
+
+        if hide_timeout_s is not None:
+            # Hide status message after specified timeout.
+            gobject.timeout_add(int(hide_timeout_s * 1e3),
+                                statusbar.remove_message, context_id,
+                                message_id)
+
     @property
     def chip_inserted(self):
         '''
