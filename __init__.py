@@ -1682,12 +1682,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # Compute UTC timestamp based on host time synced with DropBot
         # microseconds count.
         df.insert(0, 'timestamp_utc', self.device_time_sync['host'] +
-                  ((df['end'] - self.device_time_sync['device_us']) *
+                  ((df['time_us'] - self.device_time_sync['device_us']) *
                    1e-6).map(lambda x: dt.timedelta(seconds=x)))
         df.insert(2, 'step', app.protocol.current_step_number + 1)
         # Drop `start` and `end` columns since relevant time information is
         # stored in `timestamp_utc`.
-        df.drop(['start', 'end'], axis=1, inplace=True)
+        df.drop(['time_us'], axis=1, inplace=True)
 
         # Use `compresslevel=1` to prioritize compression speed while still
         # significantly reducing the output file size compared to no
