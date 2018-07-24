@@ -1121,6 +1121,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.26
             Apply specified capacitance update interval to DropBot (if
             connected).
+
+        .. versionchanged:: X.X.X
+            Clear statusbar context when real-time mode is disabled.
         '''
         app = get_app()
         if plugin_name == self.name:
@@ -1136,6 +1139,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     _L().info('Turning off all electrodes.')
                     self.control_board.hv_output_enabled = False
                     self.update_connection_status()
+                    self.clear_status()
 
     def connect_dropbot(self):
         """
