@@ -33,7 +33,7 @@ import uuid
 import warnings
 import webbrowser
 
-from dropbot import EVENT_ENABLE, EVENT_CHANNELS_UPDATED
+from dropbot import EVENT_ENABLE, EVENT_CHANNELS_UPDATED, EVENT_SHORTS_DETECTED
 from flatland import Integer, Float, Form, Boolean
 from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
@@ -435,6 +435,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: 2.30
             Push changes to connection status and actuation area to statusbar.
+
+        .. versionchanged:: X.X.X
+            Display an error message when the DropBot reports that shorts have
+            been detected on one or more channels.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -506,6 +510,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
             .. versionchanged:: 2.29
                 Tie connection status to serial connection signals.
+
+            .. versionchanged:: X.X.X
+                Display an error message when the DropBot reports that shorts
+                have been detected on one or more channels.
             '''
             # Connect to DropBot signals to monitor chip insertion status.
             self.control_board.signals.signal('output_enabled')\
@@ -567,6 +575,31 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             (self.control_board.signals.signal('channels-updated')
              .connect(_on_channels_updated, weak=False))
             _L().info('connected channels updated signal callback')
+
+            @gtk_threadsafe
+            def _on_shorts_detected(message):
+                '''
+                Example message:
+
+                ```python
+                OrderedDict([(u'event', u'shorts-detected'), (u'values', [])])
+                ```
+                '''
+                if message.get('values'):
+                    status = ('Shorts detected.  Disabled the following '
+                              'channels: %s' % message['values'])
+                    _L().error('Shorts were detected on the following '
+                               'channels:\n\n    %s\n\n'
+                               'You may continue using the DropBot, but the '
+                               'affected channels have been disabled until the'
+                               ' DropBot is restarted (e.g., unplug all cables'
+                               ' and plug back in).', message['values'])
+                else:
+                    status = 'No shorts detected.'
+                self.push_status(status)
+
+            (self.control_board.signals.signal('shorts-detected')
+             .connect(_on_shorts_detected, weak=False))
 
             @gtk_threadsafe
             def on_serial_connected(message):
