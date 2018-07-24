@@ -498,6 +498,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         def _connect_dropbot_signals(*args):
             '''
             .. versionadded:: X.X.X
+
+            .. versionchanged:: X.X.X
+                Tie connection status to serial connection signals.
             '''
             # Connect to DropBot signals to monitor chip insertion status.
             self.control_board.signals.signal('output_enabled')\
@@ -552,6 +555,19 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             (self.control_board.signals.signal('channels-updated')
              .connect(_on_channels_updated, weak=False))
             _L().info('connected channels updated signal callback')
+
+            @gtk_threadsafe
+            def on_serial_connected(message):
+                self.emit('dropbot-connected', self.control_board)
+
+            @gtk_threadsafe
+            def on_serial_disconnected(message):
+                self.emit('dropbot-disconnected')
+
+            (self.control_board.serial_signals.signal('connected')
+             .connect(on_serial_connected, weak=False))
+            (self.control_board.serial_signals.signal('disconnected')
+             .connect(on_serial_disconnected, weak=False))
 
         def _on_dropbot_connected(*args):
             '''
