@@ -429,7 +429,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             one of these signals is emitted whenever the DropBot either
             connects or disconnects.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.29
             Make `_on_dropbot_connected` function reentrant, i.e., support
             calling the function more than once.
         '''
@@ -497,9 +497,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         def _connect_dropbot_signals(*args):
             '''
-            .. versionadded:: X.X.X
+            .. versionadded:: 2.29
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.29
                 Tie connection status to serial connection signals.
             '''
             # Connect to DropBot signals to monitor chip insertion status.
@@ -598,7 +598,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 Configure :attr:`control_board.state.event_mask` to enable
                 ``channels-updated`` events.
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.29
                 Make function reentrant, i.e., support calling this function
                 more than once.  This may be useful, e.g., for supporting
                 DropBot reconnects.
