@@ -432,6 +432,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.29
             Make `_on_dropbot_connected` function reentrant, i.e., support
             calling the function more than once.
+
+        .. versionchanged:: 2.30
+            Push changes to connection status and actuation area to statusbar.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -494,6 +497,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                      self.chip_inserted.clear())
         self.connect('chip-removed', lambda *args:
                      self.update_connection_status())
+        self.connect('chip-removed', lambda *args:
+                     self.clear_status())
 
         def _connect_dropbot_signals(*args):
             '''
@@ -548,8 +553,15 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     self.actuated_area = actuated_areas.sum()
                 else:
                     self.actuated_area = 0
-                _L().info('actuated electrodes: %s (%s mm^2)',
-                          self.actuated_channels, self.actuated_area)
+                # m^2 area
+                area = self.actuated_area * (1e-3 ** 2)
+                # Approximate area in SI units.
+                value, pow10 = si.split(np.sqrt(area))
+                si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 + pow10 / 3]
+                status = ('actuated electrodes: %s (%.1f %sm^2)' %
+                          (self.actuated_channels, value ** 2, si_unit))
+                self.push_status(status, None, True)
+                _L().info(status)
                 self._state_applied.set()
 
             (self.control_board.signals.signal('channels-updated')
@@ -609,10 +621,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 message = ('Initial connection to DropBot established. '
                            'Connected signal callbacks.')
                 _L().debug(message)
+                self.push_status(message)
             else:
                 # DropBot signal callbacks have already been connected.
                 message = ('DropBot connection re-established.')
                 _L().debug(message)
+                self.push_status(message)
             self.dropbot_connected.count += 1
 
             # Set event indicating DropBot has been connected.
@@ -643,6 +657,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.connect('dropbot-connected', _on_dropbot_connected)
 
         def _on_dropbot_disconnected(*args):
+            self.push_status('DropBot connection lost.')
             # Clear capacitance exceeded event since DropBot is not connected.
             self.capacitance_exceeded.clear()
             # Clear event indicating DropBot has been disconnected.
@@ -650,6 +665,53 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.emit('chip-removed')
 
         self.connect('dropbot-disconnected', _on_dropbot_disconnected)
+
+    @gtk_threadsafe
+    def clear_status(self):
+        '''
+        Clear statusbar context for this plugin.
+
+
+        .. versionadded:: 2.30
+        '''
+        app = get_app()
+        statusbar = app.builder.get_object('statusbar')
+        context_id = statusbar.get_context_id(self.name)
+
+        statusbar.remove_all(context_id)
+
+    @gtk_threadsafe
+    def push_status(self, status, hide_timeout_s=3, clear=True):
+        '''
+        Push status message to statusbar context for this plugin.
+
+        Parameters
+        ----------
+        status : str
+            Status message.
+        hide_timeout_s : float, optional
+            Number of seconds to display message before hiding.  If `None`, do
+            not hide.
+        clear : bool, optional
+            Clear existing statusbar stack before pushing new status.
+
+
+        .. versionadded:: 2.30
+        '''
+        app = get_app()
+        statusbar = app.builder.get_object('statusbar')
+        context_id = statusbar.get_context_id(self.name)
+
+        if clear:
+            statusbar.remove_all(context_id)
+
+        message_id = statusbar.push(context_id, '[%s] %s' % (self.name, status))
+
+        if hide_timeout_s is not None:
+            # Hide status message after specified timeout.
+            gobject.timeout_add(int(hide_timeout_s * 1e3),
+                                statusbar.remove_message, context_id,
+                                message_id)
 
     @property
     def chip_inserted(self):
@@ -1066,6 +1128,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.26
             Apply specified capacitance update interval to DropBot (if
             connected).
+
+        .. versionchanged:: 2.30
+            Clear statusbar context when real-time mode is disabled.
         '''
         app = get_app()
         if plugin_name == self.name:
@@ -1081,6 +1146,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     _L().info('Turning off all electrodes.')
                     self.control_board.hv_output_enabled = False
                     self.update_connection_status()
+                    self.clear_status()
 
     def connect_dropbot(self):
         """
