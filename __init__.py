@@ -439,6 +439,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.31
             Display an error message when the DropBot reports that shorts have
             been detected on one or more channels.
+
+        .. versionchanged:: 2.32
+            Display an error message when a "halted" event is received from the
+            DropBot.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -501,8 +505,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                      self.chip_inserted.clear())
         self.connect('chip-removed', lambda *args:
                      self.update_connection_status())
-        self.connect('chip-removed', lambda *args:
-                     self.clear_status())
+        self.connect('chip-removed', lambda *args: self.clear_status())
 
         def _connect_dropbot_signals(*args):
             '''
@@ -514,6 +517,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             .. versionchanged:: 2.31
                 Display an error message when the DropBot reports that shorts
                 have been detected on one or more channels.
+
+            .. versionchanged:: 2.32
+                Display an error message when "halted" event is received from
+                the DropBot.
             '''
             # Connect to DropBot signals to monitor chip insertion status.
             self.control_board.signals.signal('output_enabled')\
@@ -577,6 +584,14 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             _L().info('connected channels updated signal callback')
 
             @gtk_threadsafe
+            def refresh_channels():
+                # XXX Reassign channel states to trigger a `channels-updated`
+                # message since actuated channel states may have changed based
+                # on the channels that were disabled.
+                self.control_board.turn_off_all_channels()
+                self.control_board.state_of_channels = self.channel_states
+
+            @gtk_threadsafe
             def _on_shorts_detected(message):
                 '''
                 Example message:
@@ -596,11 +611,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                ' and plug back in).', message['values'])
                 else:
                     status = 'No shorts detected.'
-                # Reassign channel states to trigger a `channels-updated`
-                # message since actuated channel states may have changed
-                # based on the channels that were disabled.
-                self.control_board.turn_off_all_channels()
-                self.control_board.state_of_channels = self.channel_states
+                # XXX Refresh channels since some channels may have been
+                # disabled.
+                refresh_channels()
                 self.push_status(status)
 
             (self.control_board.signals.signal('shorts-detected')
@@ -618,6 +631,33 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
              .connect(on_serial_connected, weak=False))
             (self.control_board.serial_signals.signal('disconnected')
              .connect(on_serial_disconnected, weak=False))
+
+            @gtk_threadsafe
+            def _on_halted(message):
+                # DropBot has halted.  All channels have been disabled and high
+                # voltage has been turned off.
+
+                reason =  ''
+
+                if 'error' in message:
+                    error = message['error']
+                    if error.get('name') == 'output-current-exceeded':
+                        reason = ' because output current was exceeded'
+                    elif error.get('name') == 'chip-load-saturated':
+                        reason = ' because chip load feedback exceeded allowable range'
+
+                status = 'DropBot has halted%s.' % reason
+                message = '''
+All channels have been disabled and high voltage has been
+turned off until the DropBot is restarted (e.g., unplug all
+cables and plug back in).'''
+                # XXX Refresh channels since channels were disabled.
+                refresh_channels()
+                self.push_status(status)
+                _L().error('\n'.join([status, message]))
+
+            self.control_board.signals.signal('halted').connect(_on_halted,
+                                                                weak=False)
 
         def _on_dropbot_connected(*args):
             '''
