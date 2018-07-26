@@ -436,7 +436,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.30
             Push changes to connection status and actuation area to statusbar.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.31
             Display an error message when the DropBot reports that shorts have
             been detected on one or more channels.
         '''
@@ -511,7 +511,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             .. versionchanged:: 2.29
                 Tie connection status to serial connection signals.
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.31
                 Display an error message when the DropBot reports that shorts
                 have been detected on one or more channels.
             '''
