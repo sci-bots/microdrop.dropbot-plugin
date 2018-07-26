@@ -428,6 +428,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             when ``chip-removed`` or ``chip-inserted`` signals are emitted, and
             one of these signals is emitted whenever the DropBot either
             connects or disconnects.
+
+        .. versionchanged:: 2.29
+            Make `_on_dropbot_connected` function reentrant, i.e., support
+            calling the function more than once.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -480,6 +484,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.chip_watch_thread = None
         self._chip_inserted = threading.Event()
         self._dropbot_connected = threading.Event()
+        self.dropbot_connected.count = 0
 
         self.connect('chip-inserted', lambda *args:
                      self.chip_inserted.set())
@@ -490,48 +495,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.connect('chip-removed', lambda *args:
                      self.update_connection_status())
 
-        def _on_dropbot_connected(*args):
+        def _connect_dropbot_signals(*args):
             '''
-            .. versionchanged:: 2.24
-                Synchronize time between DropBot microseconds count and host
-                UTC time.
+            .. versionadded:: 2.29
 
-                Update local actuation voltage with voltage sent in capacitance
-                update events.
-
-            .. versionchanged:: 2.25
-                Update local list of actuated channels and associated actuated
-                area from ``channels-updated`` device events.
-
-            .. versionchanged:: 2.25.1
-                Write the actuated channels list and actuated area to the debug
-                log when the DropBot reports the actuated channels.
-
-            .. versionchanged:: 2.26
-                Set :attr:`_state_applied` event and log actuated channels/area
-                to ``INFO`` level when ``channels-updated`` DropBot event is
-                received.
-
-            .. versionchanged:: 2.27
-                Connect to the ``output_enabled`` and ``output_disabled``
-                DropBot signals to update the chip insertion status.
-
-                Configure :attr:`control_board.state.event_mask` to enable
-                ``channels-updated`` events.
+            .. versionchanged:: 2.29
+                Tie connection status to serial connection signals.
             '''
-            # Set event indicating DropBot has been connected.
-            self.dropbot_connected.set()
-
-            OUTPUT_ENABLE_PIN = 22
-            # Chip may have been inserted before connecting, so `chip-inserted`
-            # event may have been missed.
-            # Explicitly check if chip is inserted by reading **active low**
-            # `OUTPUT_ENABLE_PIN`.
-            if self.control_board.digital_read(OUTPUT_ENABLE_PIN):
-                self.emit('chip-removed')
-            else:
-                self.emit('chip-inserted')
-
             # Connect to DropBot signals to monitor chip insertion status.
             self.control_board.signals.signal('output_enabled')\
                 .connect(lambda message:
@@ -541,7 +511,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 .connect(lambda message:
                          gtk_threadsafe(self.emit)('chip-removed'),
                          weak=False)
-
             capacitance_update_status = {'time': time.time()}
 
             # Update cached device load capacitance each time the
@@ -554,21 +523,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 if now - capacitance_update_status['time'] > .2:
                     self.on_device_capacitance_update(message['new_value'])
                     capacitance_update_status['time'] = now
-
             (self.control_board.signals.signal('capacitance-updated')
              .connect(_on_capacitance_updated, weak=False))
-            # Request for the DropBot to measure the device load capacitance
-            # every 100 ms.
-            app_values = self.get_app_values()
-            self.control_board.update_state(capacitance_update_interval_ms=
-                                            app_values['c_update_ms'],
-                                            event_mask=EVENT_CHANNELS_UPDATED |
-                                            EVENT_ENABLE)
             _L().info('connected capacitance updated signal callback')
-
-            self.device_time_sync = {'host': dt.datetime.utcnow(),
-                                     'device_us':
-                                     self.control_board.microseconds()}
 
             def _on_channels_updated(message):
                 '''
@@ -598,6 +555,90 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             (self.control_board.signals.signal('channels-updated')
              .connect(_on_channels_updated, weak=False))
             _L().info('connected channels updated signal callback')
+
+            @gtk_threadsafe
+            def on_serial_connected(message):
+                self.emit('dropbot-connected', self.control_board)
+
+            @gtk_threadsafe
+            def on_serial_disconnected(message):
+                self.emit('dropbot-disconnected')
+
+            (self.control_board.serial_signals.signal('connected')
+             .connect(on_serial_connected, weak=False))
+            (self.control_board.serial_signals.signal('disconnected')
+             .connect(on_serial_disconnected, weak=False))
+
+        def _on_dropbot_connected(*args):
+            '''
+            .. versionchanged:: 2.24
+                Synchronize time between DropBot microseconds count and host
+                UTC time.
+
+                Update local actuation voltage with voltage sent in capacitance
+                update events.
+
+            .. versionchanged:: 2.25
+                Update local list of actuated channels and associated actuated
+                area from ``channels-updated`` device events.
+
+            .. versionchanged:: 2.25.1
+                Write the actuated channels list and actuated area to the debug
+                log when the DropBot reports the actuated channels.
+
+            .. versionchanged:: 2.26
+                Set :attr:`_state_applied` event and log actuated channels/area
+                to ``INFO`` level when ``channels-updated`` DropBot event is
+                received.
+
+            .. versionchanged:: 2.27
+                Connect to the ``output_enabled`` and ``output_disabled``
+                DropBot signals to update the chip insertion status.
+
+                Configure :attr:`control_board.state.event_mask` to enable
+                ``channels-updated`` events.
+
+            .. versionchanged:: 2.29
+                Make function reentrant, i.e., support calling this function
+                more than once.  This may be useful, e.g., for supporting
+                DropBot reconnects.
+            '''
+            if self.dropbot_connected.count < 1:
+                # This is the initial connection.  Connect signal callbacks.
+                _connect_dropbot_signals()
+                message = ('Initial connection to DropBot established. '
+                           'Connected signal callbacks.')
+                _L().debug(message)
+            else:
+                # DropBot signal callbacks have already been connected.
+                message = ('DropBot connection re-established.')
+                _L().debug(message)
+            self.dropbot_connected.count += 1
+
+            # Set event indicating DropBot has been connected.
+            self.dropbot_connected.set()
+
+            # Request for the DropBot to measure the device load capacitance
+            # every 100 ms.
+            app_values = self.get_app_values()
+            self.control_board.update_state(capacitance_update_interval_ms=
+                                            app_values['c_update_ms'],
+                                            event_mask=EVENT_CHANNELS_UPDATED |
+                                            EVENT_ENABLE)
+
+            OUTPUT_ENABLE_PIN = 22
+            # Chip may have been inserted before connecting, so `chip-inserted`
+            # event may have been missed.
+            # Explicitly check if chip is inserted by reading **active low**
+            # `OUTPUT_ENABLE_PIN`.
+            if self.control_board.digital_read(OUTPUT_ENABLE_PIN):
+                self.emit('chip-removed')
+            else:
+                self.emit('chip-inserted')
+
+            self.device_time_sync = {'host': dt.datetime.utcnow(),
+                                     'device_us':
+                                     self.control_board.microseconds()}
 
         self.connect('dropbot-connected', _on_dropbot_connected)
 
@@ -689,7 +730,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                    flags=gtk.DIALOG_MODAL |
                                    gtk.DIALOG_DESTROY_WITH_PARENT)
         dialog.props.text = ('Running DropBot diagnostic self tests.\n\nThis '
-                             'may take ~35 seconds to complete.  Please '
+                             'may take up to a minute to complete.  Please '
                              'wait...')
         dialog.set_title('DropBot self tests')
         dialog.props.destroy_with_parent = True
@@ -1039,6 +1080,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 if not app.realtime_mode and not app.running:
                     _L().info('Turning off all electrodes.')
                     self.control_board.hv_output_enabled = False
+                    self.update_connection_status()
 
     def connect_dropbot(self):
         """
@@ -1682,12 +1724,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # Compute UTC timestamp based on host time synced with DropBot
         # microseconds count.
         df.insert(0, 'timestamp_utc', self.device_time_sync['host'] +
-                  ((df['end'] - self.device_time_sync['device_us']) *
+                  ((df['time_us'] - self.device_time_sync['device_us']) *
                    1e-6).map(lambda x: dt.timedelta(seconds=x)))
         df.insert(2, 'step', app.protocol.current_step_number + 1)
         # Drop `start` and `end` columns since relevant time information is
         # stored in `timestamp_utc`.
-        df.drop(['start', 'end'], axis=1, inplace=True)
+        df.drop(['time_us'], axis=1, inplace=True)
 
         # Use `compresslevel=1` to prioritize compression speed while still
         # significantly reducing the output file size compared to no
