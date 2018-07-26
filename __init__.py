@@ -433,7 +433,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Make `_on_dropbot_connected` function reentrant, i.e., support
             calling the function more than once.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.30
             Push changes to connection status and actuation area to statusbar.
         '''
         # Explicitly initialize GObject base class since it is not the first
@@ -672,7 +672,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         Clear statusbar context for this plugin.
 
 
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.30
         '''
         app = get_app()
         statusbar = app.builder.get_object('statusbar')
@@ -696,7 +696,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Clear existing statusbar stack before pushing new status.
 
 
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.30
         '''
         app = get_app()
         statusbar = app.builder.get_object('statusbar')
@@ -1129,7 +1129,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Apply specified capacitance update interval to DropBot (if
             connected).
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.30
             Clear statusbar context when real-time mode is disabled.
         '''
         app = get_app()
