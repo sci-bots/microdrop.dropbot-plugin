@@ -432,6 +432,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.29
             Make `_on_dropbot_connected` function reentrant, i.e., support
             calling the function more than once.
+
+        .. versionchanged:: X.X.X
+            Push connection status changes to statusbar.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -611,10 +614,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 message = ('Initial connection to DropBot established. '
                            'Connected signal callbacks.')
                 _L().debug(message)
+                self.push_status(message)
             else:
                 # DropBot signal callbacks have already been connected.
                 message = ('DropBot connection re-established.')
                 _L().debug(message)
+                self.push_status(message)
             self.dropbot_connected.count += 1
 
             # Set event indicating DropBot has been connected.
@@ -645,6 +650,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.connect('dropbot-connected', _on_dropbot_connected)
 
         def _on_dropbot_disconnected(*args):
+            self.push_status('DropBot connection lost.')
             # Clear capacitance exceeded event since DropBot is not connected.
             self.capacitance_exceeded.clear()
             # Clear event indicating DropBot has been disconnected.
