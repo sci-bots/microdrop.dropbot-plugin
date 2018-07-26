@@ -596,6 +596,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                ' and plug back in).', message['values'])
                 else:
                     status = 'No shorts detected.'
+                # Reassign channel states to trigger a `channels-updated`
+                # message since actuated channel states may have changed
+                # based on the channels that were disabled.
+                self.control_board.turn_off_all_channels()
+                self.control_board.state_of_channels = self.channel_states
                 self.push_status(status)
 
             (self.control_board.signals.signal('shorts-detected')
