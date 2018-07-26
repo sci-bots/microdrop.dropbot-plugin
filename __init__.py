@@ -1039,6 +1039,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 if not app.realtime_mode and not app.running:
                     _L().info('Turning off all electrodes.')
                     self.control_board.hv_output_enabled = False
+                    self.update_connection_status()
 
     def connect_dropbot(self):
         """
