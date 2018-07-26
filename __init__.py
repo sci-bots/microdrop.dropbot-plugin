@@ -494,6 +494,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                      self.chip_inserted.clear())
         self.connect('chip-removed', lambda *args:
                      self.update_connection_status())
+        self.connect('chip-removed', lambda *args:
+                     self.clear_status())
 
         def _connect_dropbot_signals(*args):
             '''
