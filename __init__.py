@@ -692,6 +692,11 @@ cables and plug back in).'''
                 Make function reentrant, i.e., support calling this function
                 more than once.  This may be useful, e.g., for supporting
                 DropBot reconnects.
+
+            .. versionchanged:: 2.32.1
+                Enable DropBot ``shorts-detected`` events by setting the
+                respective bit in the event mask.  Fixes bug introduced in
+                2.31.
             '''
             if self.dropbot_connected.count < 1:
                 # This is the initial connection.  Connect signal callbacks.
@@ -716,6 +721,7 @@ cables and plug back in).'''
             self.control_board.update_state(capacitance_update_interval_ms=
                                             app_values['c_update_ms'],
                                             event_mask=EVENT_CHANNELS_UPDATED |
+                                            EVENT_SHORTS_DETECTED |
                                             EVENT_ENABLE)
 
             OUTPUT_ENABLE_PIN = 22
