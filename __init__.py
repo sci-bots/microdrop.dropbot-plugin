@@ -1572,7 +1572,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # XXX TODO X.X.X refactor to implement `IApplicationMode` interface
         # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
         app = get_app()
-        self._kill_running_step()
         if self.dropbot_connected.is_set() and not app.realtime_mode:
             # Turn off all electrodes
             _L().debug('Turning off all electrodes.')
