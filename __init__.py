@@ -16,6 +16,7 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 import datetime as dt
 import gzip
@@ -444,6 +445,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
         gobject.GObject.__init__(self)
+
+        #: ..versionadded:: X.X.X
+        self.executor = ThreadPoolExecutor()
 
         self.control_board = None
         self.name = self.plugin_name
@@ -1697,62 +1701,87 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             raise RuntimeError('DropBot not connected.')
 
         app = get_app()
+        options = self.get_step_options()
+        app_values = self.get_app_values()
         requested_electrodes = electrode_states[electrode_states > 0].index
-
-        # ## Case 1: no volume threshold specified.
-        #
-        #  1. Set control board state of channels according to requested
-        #     actuation states.
-        #  2. Wait for channels to be actuated.
         requested_channels = (app.dmf_device.channels_by_electrode
                               .loc[requested_electrodes])
-        with self.control_board.transaction_lock:
+
+        # Criteria that must be met to set target capacitance.
+        threshold_criteria = [duration_s > 0,
+                              options['volume_threshold'] > 0,
+                              len(requested_electrodes) > 0,
+                              app_values['c_liquid'] > 0]
+
+        if not all(threshold_criteria):
+            # ## Case 1: no volume threshold specified.
+            #  1. Set control board state of channels according to requested
+            #     actuation states.
+            #  2. Wait for channels to be actuated.
             actuated_channels = \
                 db.threshold.actuate_channels(self.control_board,
                                               requested_channels, timeout=5)
+            #  3. Delay for specified duration.
+            yield asyncio.From(asyncio.sleep(duration_s))
+        else:
+            # ## Case 2: volume threshold specified.
+            #
+            # A volume threshold has been set for this step.
+
+            # Calculate target capacitance based on actuated area.
+            #
+            # Note: `app_values['c_liquid']` represents a *specific
+            # capacitance*, i.e., has units of $F/mm^2$.
+            actuated_areas = (app.dmf_device.electrode_areas
+                              .ix[requested_electrodes.values])
+            actuated_area = actuated_areas.sum()
+
+            meters_squared_area = actuated_area * (1e-3 ** 2)  # m^2 area
+            # Approximate length of unit side in SI units.
+            si_length, pow10 = si.split(np.sqrt(meters_squared_area))
+            si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 + pow10 /
+                                         3]
+
+            target_capacitance = (options['volume_threshold'] * actuated_area *
+                                  app_values['c_liquid'])
+            _L().info('target capacitance: %sF (actuated area: (%.1f %sm^2) '
+                      'actuated channels: %s)',
+                      si.si_format(target_capacitance), si_length ** 2,
+                      si_unit, requested_channels)
+            # Wait for target capacitance to be reached in background thread,
+            # timing out if the specified duration is exceeded.
+            co_future = \
+                db.threshold.co_target_capacitance(self.control_board,
+                                                   requested_channels,
+                                                   target_capacitance,
+                                                   allow_disabled=False,
+                                                   timeout=duration_s)
+            try:
+                dropbot_event = yield asyncio.From(asyncio
+                                                   .wait_for(co_future,
+                                                             duration_s))
+                _L().debug('target capacitance reached: `%s`', dropbot_event)
+                actuated_channels = dropbot_event['actuated_channels']
+
+                # Show notification in main window status bar.
+                status = ('reached %sF (> %sF) over electrodes: %s (%.1f '
+                          '%sm^2) after %ss' %
+                          (si.si_format(dropbot_event['new_value']),
+                           si.si_format(dropbot_event['target']),
+                           actuated_channels, si_length ** 2, si_unit,
+                           (dropbot_event['end'] -
+                            dropbot_event['start']).total_seconds()))
+                gtk_threadsafe(self.push_status)(status, 5, False)
+            except asyncio.TimeoutError:
+                raise RuntimeError('Timed out waiting for target capacitance.')
+
         actuated_electrodes = (app.dmf_device.electrodes_by_channel
-                               .loc[actuated_channels])
-        #  3. Delay for specified duration.
-        yield asyncio.From(asyncio.sleep(duration_s))
-        #  4. Return list of actuated channels (which _may_ be fewer than the
-        #     number of requested actuated channels if one or more channels is
-        #     _disabled_).
+                                .loc[actuated_channels])
+
+        # Return list of actuated channels (which _may_ be fewer than the
+        # number of requested actuated channels if one or more channels is
+        # _disabled_).
         raise asyncio.Return(actuated_electrodes)
-
-        # ## Case 2: volume threshold specified.
-
-        # XXX TODO refactor code below to use `db.threshold...`
-        '''
-            # Criteria that must be met to set target capacitance.
-            threshold_criteria = [options['volume_threshold'] > 0,
-                                  self.actuated_area > 0,
-                                  app_values['c_liquid'] > 0]
-
-            if not self.dropbot_connected.is_set():
-                if options['volume_threshold'] > 0:
-                    # Volume threshold is set.  Treat `duration` as maximum
-                    # duration and continue immediately.
-                    self.complete_actuation()
-                else:
-                    # DropBot is not connected.  Delay for specified duration.
-                    _delay_completion(options['duration'] * 1e-3)
-            elif all(threshold_criteria):
-                # A volume threshold has been set for this step.
-
-                # Calculate target capacitance based on actuated area.
-                #
-                # Note: `app_values['c_liquid']` represents a *specific
-                # capacitance*, i.e., has units of $F/mm^2$.
-                duration_s = options['duration'] * 1e-3
-                if self._state_applied.wait(duration_s):
-                    target_capacitance = (options['volume_threshold'] *
-                                          self.actuated_area *
-                                          app_values['c_liquid'])
-                    _L().info('target capacitance: %sF (actuated area: %s mm^2'
-                              ', actuated channels: %s)',
-                              si.si_format(target_capacitance),
-                              self.actuated_area, self.actuated_channels)
-        '''
 
     def on_experiment_log_changed(self, log):
         '''
