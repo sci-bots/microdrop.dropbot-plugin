@@ -48,7 +48,6 @@ from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
 from pygtkhelpers.utils import gsignal
 from zmq_plugin.plugin import Plugin as ZmqPlugin
-from zmq_plugin.schema import decode_content_data
 import base_node_rpc as bnr
 import dropbot as db
 import dropbot.hardware_test
