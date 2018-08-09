@@ -1600,9 +1600,26 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         Parameters:
             voltage : RMS voltage
+
+
+        .. versionchanged:: X.X.X
+            Ensure high-voltage output is turned on and enabled.
         """
         _L().info("%.1f", voltage)
-        self.control_board.voltage = voltage
+
+        with self.control_board.transaction_lock:
+            original_state = self.control_board.state
+
+            # Construct required state
+            state = original_state.copy()
+            state.hv_output_enabled = True
+            state.hv_output_selected = True
+
+            if not (state == original_state).all():
+                # Update modified state properties.
+                self.control_board.state = state[state != original_state]
+
+            self.control_board.voltage = voltage
 
         # Cache measured actuation voltage. Delay before measuring the
         # actuation voltage to give it time to settle.
