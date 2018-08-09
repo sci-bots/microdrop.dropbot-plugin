@@ -128,15 +128,6 @@ class DmfZmqPlugin(ZmqPlugin):
                 # The 'microdrop.electrode_controller_plugin' plugin maintains
                 # the requested state of each electrode.
                 msg = json.loads(msg_json)
-                if msg['content']['command'] in ('set_electrode_state',
-                                                 'set_electrode_states'):
-                    data = decode_content_data(msg)
-                    self.parent.update_channel_states(data['channel_states'])
-                elif msg['content']['command'] == 'get_channel_states':
-                    data = decode_content_data(msg)
-                    self.parent.channel_states =\
-                        self.parent.channel_states.iloc[0:0]
-                    self.parent.update_channel_states(data['channel_states'])
             elif all([source == 'dmf_device_ui_plugin',
                       msg_type == 'execute_request']):
                 msg = json.loads(msg_json)
