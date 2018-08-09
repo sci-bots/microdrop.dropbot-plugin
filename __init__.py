@@ -16,20 +16,16 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
-from collections import deque
 from functools import wraps
-import Queue
 import datetime as dt
 import gzip
 import json
 import logging
 import pkg_resources
 import re
-import thread
 import threading
 import time
 import types
-import uuid
 import warnings
 import webbrowser
 
@@ -39,15 +35,13 @@ from flatland.validation import ValueAtLeast, ValueAtMost
 from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
                                                 FigureCanvas)
 from matplotlib.figure import Figure
-from logging_helpers import _L, caller_name  #: .. versionadded:: 2.24
+from logging_helpers import _L  #: .. versionadded:: 2.24
 from microdrop.app_context import get_app, get_hub_uri
-from microdrop.gui.protocol_grid_controller import ProtocolGridController
-from microdrop.interfaces import IElectrodeActuator
+from microdrop.interfaces import (IElectrodeActuator, IPlugin,
+                                  IWaveformGenerator)
 from microdrop.plugin_helpers import (StepOptionsController, AppDataController)
-from microdrop.plugin_manager import (IPlugin, IWaveformGenerator, Plugin,
-                                      implements, PluginGlobals,
+from microdrop.plugin_manager import (Plugin, implements, PluginGlobals,
                                       ScheduleRequest, emit_signal,
-                                      get_service_instance,
                                       get_service_instance_by_name)
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
@@ -59,6 +53,7 @@ import base_node_rpc as bnr
 import dropbot as db
 import dropbot.hardware_test
 import dropbot.self_test
+import dropbot.threshold
 import gobject
 import gtk
 # XXX Use `json_tricks` rather than standard `json` to support serializing
@@ -67,7 +62,6 @@ import gtk
 # [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
 import json_tricks
 import numpy as np
-import or_event
 import pandas as pd
 import path_helpers as ph
 import semantic_version
