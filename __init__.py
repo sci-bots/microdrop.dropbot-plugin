@@ -1437,54 +1437,69 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     def _calibrate_device_capacitance(self, name):
         '''
         .. versionadded:: 0.18
+
+        .. versionchanged:: X.X.X
+            Refactor to use ``microdrop.electrode_controller_plugin`` step
+            options for frequency, voltage, and channels.
         '''
-        # XXX TODO Refactor to use `microdrop.electrode_controller_plugin` step options for frequency and voltage
-        # XXX TODO Refactor to require DropBot/control board `transaction_lock`.
+        plugin = get_service_instance_by_name('microdrop'
+                                              '.electrode_controller_plugin',
+                                              env='microdrop')
         if not self.dropbot_connected.is_set():
             _L().error('DropBot is not connected.')
-        elif self.actuated_area == 0:
-            _L().error('At least one electrode must be actuated to perform '
-                       'calibration.')
         else:
-            max_channels = self.control_board.number_of_channels
-            # All channels should default to off.
-            channel_states = np.zeros(max_channels, dtype=int)
-            # Set the state of any channels that have been set explicitly.
-            channel_states[self.channel_states.index
-                           .values.tolist()] = self.channel_states
+            with self.control_board.transaction_lock:
+                # Save original state to restore later.
+                original_state = self.control_board.state
+                channel_states = self.control_board.state_of_channels
 
-            # enable high voltage
-            if not self.control_board.hv_output_enabled:
-                # XXX Only set if necessary, since there is a ~200 ms delay.
-                self.control_board.hv_output_enabled = True
+                options = plugin.get_step_options()
+                try:
+                    states = options['electrode_states'].copy()
+                    # Index requested actuation states by channel rather than
+                    # electrode.
+                    app = get_app()
+                    states.index = (app.dmf_device.channels_by_electrode
+                                    .loc[states.index])
 
-            # set the voltage and frequency specified for the current step
-            options = self.get_step_options()
-            emit_signal("set_frequency",
-                        options['frequency'],
-                        interface=IWaveformGenerator)
-            emit_signal("set_voltage", options['voltage'],
-                        interface=IWaveformGenerator)
+                    actuated_electrodes = \
+                        db.threshold.actuate_channels(self.control_board,
+                                                      states[states > 0].index,
+                                                      timeout=5)
 
-            # perform the capacitance measurement
-            self.control_board.set_state_of_channels(channel_states)
-            c = self.control_board.measure_capacitance()
-            _L().info("on_measure_%s_capacitance: {}F/%.1f mm^2 = {}F/mm^2",
-                      name, si.si_format(c), self.actuated_area,
-                      si.si_format(c / self.actuated_area))
-            app_values = {}
-            app_values['c_%s' % name] = c / self.actuated_area
-            self.set_app_values(app_values)
+                    if not actuated_electrodes:
+                        _L().error('At least one electrode must be actuated to '
+                                'perform calibration.')
 
-            # send a signal to update the gui
-            emit_signal('on_device_capacitance_update', c)
+                    # Set output voltage and frequency.
+                    emit_signal("set_frequency",
+                                options['Frequency (Hz)'],
+                                interface=IWaveformGenerator)
+                    emit_signal("set_voltage", options['Voltage (V)'],
+                                interface=IWaveformGenerator)
 
-            # Turn off all electrodes and disable high voltage if we're
-            # not in realtime mode.
-            if not get_app().realtime_mode:
-                self.control_board.hv_output_enabled = False
-                self.control_board.set_state_of_channels(
-                    np.zeros(max_channels, dtype=int))
+                    # Measure absolute capacitance and compute _specific_
+                    # capacitance (i.e., capacitance per mm^2).
+                    c = self.control_board.measure_capacitance()
+                    app_values = {}
+                    app_values['c_%s' % name] = c / self.actuated_area
+                    self.set_app_values(app_values)
+
+                    message = ('Measured %s capacitance: %sF/%.1f mm^2 = %sF/mm^2'
+                            % (name, si.si_format(c), self.actuated_area,
+                                si.si_format(c / self.actuated_area)))
+                    _L().info(message)
+                    gtk_threadsafe(self.push_status)(message, 10, False)
+
+                    # send a signal to update the gui
+                    emit_signal('on_device_capacitance_update', c)
+                finally:
+                    # Restore original control board state.
+                    state = self.control_board.state
+                    if not (state == original_state).all():
+                        self.control_board.state = \
+                            original_state[state != original_state]
+                    self.control_board.state_of_channels = channel_states
 
     def on_measure_liquid_capacitance(self):
         '''
