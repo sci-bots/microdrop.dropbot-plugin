@@ -1698,13 +1698,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         #  1. Set control board state of channels according to requested
         #     actuation states.
         #  2. Wait for channels to be actuated.
-        requested_channels = (app.dmf_device.electrode_channels
+        requested_channels = (app.dmf_device.channels_by_electrode
                               .loc[requested_electrodes])
         with self.control_board.transaction_lock:
             actuated_channels = \
                 db.threshold.actuate_channels(self.control_board,
                                               requested_channels, timeout=5)
-        actuated_electrodes = (app.dmf_device.channel_electrodes
+        actuated_electrodes = (app.dmf_device.electrodes_by_channel
                                .loc[actuated_channels])
         #  3. Delay for specified duration.
         yield asyncio.From(asyncio.sleep(duration_s))
