@@ -1202,8 +1202,14 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 Ignore mismatch between DropBot driver and firmware versions as
                 long as base minor versions are equal, i.e., assume API is
                 backwards compatible.
+
+            .. versionchanged:: X.X.X
+                Fix connection of DropBot signals when plugin is disabled and
+                re-enabled.
             '''
             try:
+                self.dropbot_connected.count = 0
+                self.dropbot_connected.clear()
                 self.control_board = db.SerialProxy(**kwargs)
                 # Emit signal to notify that DropBot connection was
                 # established.
