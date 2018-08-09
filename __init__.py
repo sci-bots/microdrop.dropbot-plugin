@@ -1440,6 +1440,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                          .set_markup, ', '.join([self.connection_status,
                                                  label]))
 
+    @gtk_threadsafe
     def _calibrate_device_capacitance(self, name):
         '''
         .. versionadded:: 0.18
@@ -1474,8 +1475,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                                       timeout=5)
 
                     if not actuated_electrodes:
-                        _L().error('At least one electrode must be actuated to '
-                                'perform calibration.')
+                        _L().error('At least one electrode must be actuated to'
+                                   ' perform calibration.')
+                        return
 
                     # Set output voltage and frequency.
                     emit_signal("set_frequency",
