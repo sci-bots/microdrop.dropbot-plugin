@@ -448,6 +448,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         #: ..versionadded:: X.X.X
         self.executor = ThreadPoolExecutor()
+        #: ..versionadded:: X.X.X
+        self._capacitance_log_lock = threading.Lock()
 
         self.control_board = None
         self.name = self.plugin_name
@@ -1546,7 +1548,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Remove ``sampling_rate_hz`` column.  Move ``capacitance`` column to
             index 1 (adjacent to ``timestamp_utc`` column).
         '''
-        # XXX TODO Connect to blinker `actuation-completed(actuated_channels, capacitance_updates)` signal. See https://trello.com/c/tAroYIwt
+        _L().info('logging %s capacitance updates', len(capacitance_updates))
         app = get_app()
 
         # Append data to CSV file.
@@ -1567,15 +1569,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # stored in `timestamp_utc`.
         df.drop(['time_us'], axis=1, inplace=True)
 
-        # Use `compresslevel=1` to prioritize compression speed while still
-        # significantly reducing the output file size compared to no
-        # compression.
-        #
-        # See [here][1] for some supporting motivation.
-        #
-        # [1]: https://github.com/gruntjs/grunt-contrib-compress/issues/116#issuecomment-70883022
-        with gzip.open(csv_output_path, 'a', compresslevel=1) as output:
-            df.to_csv(output, index=False, header=include_header)
+        with self._capacitance_log_lock:
+            # Use `compresslevel=1` to prioritize compression speed while still
+            # significantly reducing the output file size compared to no
+            # compression.
+            #
+            # See [here][1] for some supporting motivation.
+            #
+            # [1]: https://github.com/gruntjs/grunt-contrib-compress/issues/116#issuecomment-70883022
+            with gzip.open(csv_output_path, 'a', compresslevel=1) as output:
+                df.to_csv(output, index=False, header=include_header)
+        _L().info('logged %s capacitance updates to `%s`', df.shape[0],
+                  csv_output_path)
 
     def on_protocol_run(self):
         """
