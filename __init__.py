@@ -1677,31 +1677,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         # XXX TODO Connect to `capacitance-updated` signal to record capacitance values measured during actuation.
         # XXX TODO Maybe send blinker `actuation-completed(actuated_channels, capacitance_updates)` signal? See https://trello.com/c/tAroYIwt
-        '''
-
-        def _on_step_capacitance_updated(self, message):
-            """
-            .. versionadded:: 2.25
-
-
-            Callback for ``capacitance-updated`` DropBot device events (only called
-            when step is running).
-
-            Add current list of actuated channels and associated actuated electrode
-            area to capacitance update message and add message to list of updates
-            for the currently running step.
-            """
-            message['actuated_channels'] = self.actuated_channels
-            message['actuated_area'] = self.actuated_area
-            self._step_capacitances.append(message)
-
-        # Connect to `capacitance-updated` signal to record capacitance
-        # values measured during the step.
-        (self.control_board.signals.signal('capacitance-updated')
-         .connect(self._on_step_capacitance_updated, weak=False))
-        logger.info('connected capacitance updated signal callback')
-        '''
-
         if not self.dropbot_connected.is_set():
             raise RuntimeError('DropBot not connected.')
 
@@ -1726,8 +1701,24 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             actuated_channels = \
                 db.threshold.actuate_channels(self.control_board,
                                               requested_channels, timeout=5)
-            #  3. Delay for specified duration.
-            yield asyncio.From(asyncio.sleep(duration_s))
+
+            #  3. Connect to `capacitance-updated` signal to record capacitance
+            #     values measured during the step.
+            capacitance_messages = []
+
+            def _on_capacitance_updated(message):
+                message['actuated_channels'] = self.actuated_channels
+                message['actuated_area'] = self.actuated_area
+                capacitance_messages.append(message)
+
+            (self.control_board.signals.signal('capacitance-updated')
+             .connect(_on_capacitance_updated))
+            #  4. Delay for specified duration.
+            try:
+                yield asyncio.From(asyncio.sleep(duration_s))
+            finally:
+                (self.control_board.signals.signal('capacitance-updated')
+                 .disconnect(_on_capacitance_updated))
         else:
             # ## Case 2: volume threshold specified.
             #
@@ -1768,6 +1759,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 _L().debug('target capacitance reached: `%s`', dropbot_event)
                 actuated_channels = dropbot_event['actuated_channels']
 
+                capacitance_messages = dropbot_event['capacitance_updates']
+                # Add actuated area to capacitance update messages.
+                for capacitance_i in capacitance_messages:
+                    capacitance_i['acuated_area'] = actuated_area
+
                 # Show notification in main window status bar.
                 status = ('reached %sF (> %sF) over electrodes: %s (%.1f '
                           '%sm^2) after %ss' %
@@ -1781,7 +1777,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 raise RuntimeError('Timed out waiting for target capacitance.')
 
         actuated_electrodes = (app.dmf_device.electrodes_by_channel
-                                .loc[actuated_channels])
+                               .loc[actuated_channels])
+
+        # Write capacitance updates to log in background thread.
+        self.executor.submit(self.log_capacitance_updates,
+                             capacitance_messages)
 
         # Return list of actuated channels (which _may_ be fewer than the
         # number of requested actuated channels if one or more channels is
