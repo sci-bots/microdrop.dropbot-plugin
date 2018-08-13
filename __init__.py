@@ -1708,7 +1708,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                               .loc[requested_electrodes])
 
         # Criteria that must be met to set target capacitance.
-        threshold_criteria = [duration_s > 0,
+        threshold_criteria = [app.running, duration_s > 0,
                               options['volume_threshold'] > 0,
                               len(requested_electrodes) > 0,
                               app_values['c_liquid'] > 0]
