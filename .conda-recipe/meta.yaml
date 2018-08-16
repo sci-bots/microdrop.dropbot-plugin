@@ -34,7 +34,9 @@ requirements:
     #: .. versionadded:: 2.27
     - logging-helpers >=0.4
     #: .. versionchanged:: 2.27
-    - microdrop >=2.23
+    #: .. versionchanged:: X.X.X
+    #:     Require `IElectrodeActuator` interface.
+    - microdrop >=2.25
     - microdrop-plugin-template
     - microdrop-plugin-manager >=0.14
     - microdrop-utility
@@ -72,7 +74,9 @@ requirements:
     #: .. versionadded:: 2.27
     - logging-helpers >=0.4
     #: .. versionchanged:: 2.27
-    - microdrop >=2.23
+    #: .. versionchanged:: X.X.X
+    #:     Require `IElectrodeActuator` interface.
+    - microdrop >=2.25
     - microdrop-plugin-template
     - microdrop-utility
     #: .. versionadded:: 2.24
