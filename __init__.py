@@ -575,7 +575,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 status = ('actuated electrodes: %s (%.1f %sm^2)' %
                           (self.actuated_channels, value ** 2, si_unit))
                 self.push_status(status, None, True)
-                _L().info(status)
+                _L().debug(status)
                 self._state_applied.set()
 
             (self.control_board.signals.signal('channels-updated')
@@ -1548,7 +1548,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Remove ``sampling_rate_hz`` column.  Move ``capacitance`` column to
             index 1 (adjacent to ``timestamp_utc`` column).
         '''
-        _L().info('logging %s capacitance updates', len(capacitance_updates))
+        logger = _L()  # use logger with method context
+        logger.debug('logging %s capacitance updates',
+                     len(capacitance_updates))
         app = get_app()
 
         # Append data to CSV file.
@@ -1579,8 +1581,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # [1]: https://github.com/gruntjs/grunt-contrib-compress/issues/116#issuecomment-70883022
             with gzip.open(csv_output_path, 'a', compresslevel=1) as output:
                 df.to_csv(output, index=False, header=include_header)
-        _L().info('logged %s capacitance updates to `%s`', df.shape[0],
-                  csv_output_path)
+        logger.info('logged %s capacitance updates to `%s`', df.shape[0],
+                    csv_output_path)
 
     def on_protocol_run(self):
         """
@@ -1620,7 +1622,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: X.X.X
             Ensure high-voltage output is turned on and enabled.
         """
-        _L().info("%.1f", voltage)
+        _L().debug("%.1f", voltage)
 
         with self.control_board.transaction_lock:
             original_state = self.control_board.state
@@ -1650,7 +1652,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         Parameters:
             frequency : frequency in Hz
         """
-        _L().info("%.1f", frequency)
+        _L().debug("%.1f", frequency)
         self.control_board.frequency = frequency
         self.current_frequency = frequency
 
@@ -1740,10 +1742,14 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
             target_capacitance = (options['volume_threshold'] * actuated_area *
                                   app_values['c_liquid'])
-            _L().info('target capacitance: %sF (actuated area: (%.1f %sm^2) '
-                      'actuated channels: %s)',
-                      si.si_format(target_capacitance), si_length ** 2,
-                      si_unit, requested_channels)
+
+            logger = _L()  # use logger with function context
+            if logger.getEffectiveLevel() <= logging.DEBUG:
+                message = ('target capacitance: %sF (actuated area: (%.1f '
+                           '%sm^2) actuated channels: %s)' %
+                           (si.si_format(target_capacitance), si_length ** 2,
+                            si_unit, requested_channels))
+                map(logger.debug, message.splitlines())
             # Wait for target capacitance to be reached in background thread,
             # timing out if the specified duration is exceeded.
             co_future = \
