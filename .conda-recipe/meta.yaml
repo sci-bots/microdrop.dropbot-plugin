@@ -27,13 +27,16 @@ requirements:
     #: .. versionchanged:: 2.28
     #: .. versionchanged:: 2.29
     #: .. versionchanged:: 2.32.2
-    - dropbot >=1.64.1
+    #: .. versionchanged:: 2.33
+    - dropbot >=1.65
     - flatland-fork
     - json-tricks >=3.8.0
     #: .. versionadded:: 2.27
     - logging-helpers >=0.4
     #: .. versionchanged:: 2.27
-    - microdrop >=2.23
+    #: .. versionchanged:: 2.33
+    #:     Require `IElectrodeActuator` interface.
+    - microdrop >=2.25
     - microdrop-plugin-template
     - microdrop-plugin-manager >=0.14
     - microdrop-utility
@@ -48,7 +51,9 @@ requirements:
     - semantic_version
     #: .. versionadded:: 2.24
     - si-prefix
-    # .. versionchanged:: 0.16
+    #: .. versionadded:: 2.33
+    - trollius
+    #: .. versionchanged:: 0.16
     - wheeler.pygtkhelpers >=0.19
     - zmq-plugin
 
@@ -62,13 +67,16 @@ requirements:
     #: .. versionchanged:: 2.28
     #: .. versionchanged:: 2.29
     #: .. versionchanged:: 2.32.2
-    - dropbot >=1.64.1
+    #: .. versionchanged:: 2.33
+    - dropbot >=1.65
     - flatland-fork
     - json-tricks >=3.8.0
     #: .. versionadded:: 2.27
     - logging-helpers >=0.4
     #: .. versionchanged:: 2.27
-    - microdrop >=2.23
+    #: .. versionchanged:: 2.33
+    #:     Require `IElectrodeActuator` interface.
+    - microdrop >=2.25
     - microdrop-plugin-template
     - microdrop-utility
     #: .. versionadded:: 2.24
@@ -82,6 +90,8 @@ requirements:
     - semantic_version
     #: .. versionadded:: 2.24
     - si-prefix
+    #: .. versionadded:: 2.33
+    - trollius
     # .. versionchanged:: 0.16
     - wheeler.pygtkhelpers >=0.19
     - zmq-plugin

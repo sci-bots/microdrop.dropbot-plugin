@@ -16,20 +16,17 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
-from collections import deque
+from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
-import Queue
 import datetime as dt
 import gzip
 import json
 import logging
 import pkg_resources
 import re
-import thread
 import threading
 import time
 import types
-import uuid
 import warnings
 import webbrowser
 
@@ -41,23 +38,22 @@ from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
 from matplotlib.figure import Figure
 from logging_helpers import _L  #: .. versionadded:: 2.24
 from microdrop.app_context import get_app, get_hub_uri
-from microdrop.gui.protocol_grid_controller import ProtocolGridController
+from microdrop.interfaces import (IElectrodeActuator, IPlugin,
+                                  IWaveformGenerator)
 from microdrop.plugin_helpers import (StepOptionsController, AppDataController)
-from microdrop.plugin_manager import (IPlugin, IWaveformGenerator, Plugin,
-                                      implements, PluginGlobals,
+from microdrop.plugin_manager import (Plugin, implements, PluginGlobals,
                                       ScheduleRequest, emit_signal,
-                                      get_service_instance,
                                       get_service_instance_by_name)
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
 from pygtkhelpers.utils import gsignal
 from zmq_plugin.plugin import Plugin as ZmqPlugin
-from zmq_plugin.schema import decode_content_data
 import base_node_rpc as bnr
 import dropbot as db
 import dropbot.hardware_test
 import dropbot.self_test
+import dropbot.threshold
 import gobject
 import gtk
 # XXX Use `json_tricks` rather than standard `json` to support serializing
@@ -66,12 +62,12 @@ import gtk
 # [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
 import json_tricks
 import numpy as np
-import or_event
 import pandas as pd
 import path_helpers as ph
 import semantic_version
 import si_prefix as si
 import tables
+import trollius as asyncio
 import zmq
 
 from ._version import get_versions
@@ -132,15 +128,6 @@ class DmfZmqPlugin(ZmqPlugin):
                 # The 'microdrop.electrode_controller_plugin' plugin maintains
                 # the requested state of each electrode.
                 msg = json.loads(msg_json)
-                if msg['content']['command'] in ('set_electrode_state',
-                                                 'set_electrode_states'):
-                    data = decode_content_data(msg)
-                    self.parent.update_channel_states(data['channel_states'])
-                elif msg['content']['command'] == 'get_channel_states':
-                    data = decode_content_data(msg)
-                    self.parent.channel_states =\
-                        self.parent.channel_states.iloc[0:0]
-                    self.parent.update_channel_states(data['channel_states'])
             elif all([source == 'dmf_device_ui_plugin',
                       msg_type == 'execute_request']):
                 msg = json.loads(msg_json)
@@ -396,6 +383,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     gsignal('chip-removed')
 
     implements(IPlugin)
+    implements(IElectrodeActuator)
     implements(IWaveformGenerator)
 
     version = __version__
@@ -406,8 +394,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         Expose StepFields as a property to avoid breaking code that accesses
         the StepFields member (vs through the get_step_form_class method).
+
+
+        .. versionchanged:: 2.33
+            Deprecate all step fields _except_ ``volume_threshold`` as part of
+            refactoring to implement `IElectrodeActuator` interface.
         """
-        return self.get_step_form_class()
+        return Form.of(#: .. versionadded:: 0.18
+                       Float.named('volume_threshold')
+                       .using(default=0,
+                              optional=True,
+                              validators=[ValueAtLeast(minimum=0),
+                                          ValueAtMost(maximum=1.0)]))
 
     def __init__(self):
         '''
@@ -448,11 +446,15 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # base class listed.
         gobject.GObject.__init__(self)
 
+        #: ..versionadded:: 2.33
+        self.executor = ThreadPoolExecutor()
+        #: ..versionadded:: 2.33
+        self._capacitance_log_lock = threading.Lock()
+
         self.control_board = None
         self.name = self.plugin_name
         self.connection_status = "Not connected"
         self.current_frequency = None
-        self.timeout_id = None
         self.channel_states = pd.Series()
         self.plugin = None
         self.plugin_timeout_id = None
@@ -483,14 +485,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.actuated_channels = []
 
         #: .. versionadded:: 2.24
-        self.step_cancelled = threading.Event()
-        #: .. versionadded:: 2.24
         self.capacitance_watch_thread = None
         #: .. versionadded:: 2.24
-        self.capacitance_watch_finished = threading.Event()
-        self.capacitance_watch_finished.set()
-        #: .. versionadded:: 2.24
         self.capacitance_exceeded = threading.Event()
+        #: .. versionadded:: 2.33
+        self._actuation_completed = threading.Event()
 
         self.chip_watch_thread = None
         self._chip_inserted = threading.Event()
@@ -576,7 +575,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 status = ('actuated electrodes: %s (%.1f %sm^2)' %
                           (self.actuated_channels, value ** 2, si_unit))
                 self.push_status(status, None, True)
-                _L().info(status)
+                _L().debug(status)
                 self._state_applied.set()
 
             (self.control_board.signals.signal('channels-updated')
@@ -648,13 +647,14 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
                 status = 'DropBot has halted%s.' % reason
                 message = '''
-All channels have been disabled and high voltage has been
-turned off until the DropBot is restarted (e.g., unplug all
-cables and plug back in).'''
+                    All channels have been disabled and high voltage has been
+                    turned off until the DropBot is restarted (e.g., unplug all
+                    cables and plug back in).'''.strip()
                 # XXX Refresh channels since channels were disabled.
                 refresh_channels()
                 self.push_status(status)
-                _L().error('\n'.join([status, message]))
+                _L().error('\n'.join([status, map(str.strip,
+                                                  message.splitlines())]))
 
             self.control_board.signals.signal('halted').connect(_on_halted,
                                                                 weak=False)
@@ -1071,61 +1071,11 @@ cables and plug back in).'''
                                                properties={'show_in_gui':
                                                            True}))
 
-    def get_step_form_class(self):
-        """
-        Override to set default values based on their corresponding app options.
-
-
-        .. versionchanged:: 2.25.2
-            Deprecate the ``max_repeats`` step option since it is no longer
-            used.
-        """
-        app_values = self.get_app_values()
-        return Form.of(Integer.named('duration')
-                       .using(default=app_values['default_duration'],
-                              optional=True,
-                              validators=[ValueAtLeast(minimum=0)]),
-                       Float.named('voltage')
-                       .using(default=app_values['default_voltage'],
-                              optional=True,
-                              validators=[ValueAtLeast(minimum=0),
-                                          max_voltage]),
-                       Float.named('frequency')
-                       .using(default=app_values['default_frequency'],
-                              optional=True,
-                              validators=[ValueAtLeast(minimum=0),
-                                          check_frequency]),
-                       #: .. versionadded:: 0.18
-                       Float.named('volume_threshold')
-                       .using(default=0,
-                              optional=True,
-                              validators=[ValueAtLeast(minimum=0),
-                                          ValueAtMost(maximum=1.0)]))
-
-    def update_channel_states(self, channel_states):
-        _L().info('update_channel_states')
-        # Update locally cached channel states with new modified states.
-        try:
-            self.channel_states = channel_states.combine_first(self
-                                                               .channel_states)
-        except ValueError:
-            logging.info('channel_states: %s', channel_states)
-            logging.info('self.channel_states: %s', self.channel_states)
-            logging.info('', exc_info=True)
-        else:
-            self._channel_states_received.channel_states = \
-                self.channel_states.copy()
-            if self._channel_states_received.is_set():
-                self.on_step_run()
-            else:
-                self._channel_states_received.set()
-
     def cleanup_plugin(self):
         '''
         .. versionchanged:: 2.25
             Kill any currently running step.
         '''
-        self._kill_running_step()
         if self.plugin_timeout_id is not None:
             gobject.source_remove(self.plugin_timeout_id)
         if self.plugin is not None:
@@ -1152,7 +1102,7 @@ cables and plug back in).'''
             # Schedule initialization of menu user interface.  Calling
             # `create_ui()` directly is not thread-safe, since it includes GTK
             # code.
-            gobject.idle_add(self.create_ui)
+            gtk_threadsafe(self.create_ui)()
 
         self.cleanup_plugin()
         self.update_connection_status()
@@ -1167,15 +1117,9 @@ cables and plug back in).'''
         self.plugin_timeout_id = gtk.timeout_add(10, self.plugin.check_sockets)
 
         self.connect_dropbot()
-        if get_app().protocol:
-            self.on_step_run()
-            self._update_protocol_grid()
 
     def on_plugin_disable(self):
         self.cleanup_plugin()
-        if get_app().protocol:
-            self.on_step_run()
-            self._update_protocol_grid()
 
     def on_app_exit(self):
         """
@@ -1184,26 +1128,11 @@ cables and plug back in).'''
         .. versionchanged:: 0.19
             Emit ``dropbot-disconnected`` ``gsignal`` after closing DropBot
             connection.
+
+        .. versionchanged:: 2.33
+            Delegate all clean-up to :meth:`cleanup_plugin()`.
         """
         self.cleanup_plugin()
-        try:
-            # TODO Is this required?  This code is already run in
-            # `cleanup_plugin()`.
-            self.control_board.hv_output_enabled = False
-            self.control_board.terminate()
-            self.control_board = None
-            gobject.idle_add(self.emit, 'dropbot-disconnected')
-        except Exception:
-            # ignore any exceptions (e.g., if the board is not connected)
-            pass
-
-    def on_protocol_swapped(self, old_protocol, protocol):
-        self._update_protocol_grid()
-
-    def _update_protocol_grid(self):
-        pgc = get_service_instance(ProtocolGridController, env='microdrop')
-        if pgc.enabled_fields:
-            pgc.update_grid()
 
     def on_app_options_changed(self, plugin_name):
         '''
@@ -1218,10 +1147,9 @@ cables and plug back in).'''
         .. versionchanged:: 2.30
             Clear statusbar context when real-time mode is disabled.
         '''
+        # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
         app = get_app()
-        if plugin_name == self.name:
-            self._update_protocol_grid()
-        elif plugin_name == app.name:
+        if plugin_name == app.name:
             # Turn off all electrodes if we're not in realtime mode and not
             # running a protocol.
             if self.dropbot_connected.is_set():
@@ -1280,8 +1208,14 @@ cables and plug back in).'''
                 Ignore mismatch between DropBot driver and firmware versions as
                 long as base minor versions are equal, i.e., assume API is
                 backwards compatible.
+
+            .. versionchanged:: 2.33
+                Fix connection of DropBot signals when plugin is disabled and
+                re-enabled.
             '''
             try:
+                self.dropbot_connected.count = 0
+                self.dropbot_connected.clear()
                 self.control_board = db.SerialProxy(**kwargs)
                 # Emit signal to notify that DropBot connection was
                 # established.
@@ -1512,55 +1446,74 @@ cables and plug back in).'''
                          .set_markup, ', '.join([self.connection_status,
                                                  label]))
 
+    @gtk_threadsafe
     def _calibrate_device_capacitance(self, name):
         '''
         .. versionadded:: 0.18
+
+        .. versionchanged:: 2.33
+            Refactor to use ``microdrop.electrode_controller_plugin`` step
+            options for frequency, voltage, and channels.
         '''
+        plugin = get_service_instance_by_name('microdrop'
+                                              '.electrode_controller_plugin',
+                                              env='microdrop')
         if not self.dropbot_connected.is_set():
             _L().error('DropBot is not connected.')
-        elif self.actuated_area == 0:
-            _L().error('At least one electrode must be actuated to perform '
-                       'calibration.')
         else:
-            max_channels = self.control_board.number_of_channels
-            # All channels should default to off.
-            channel_states = np.zeros(max_channels, dtype=int)
-            # Set the state of any channels that have been set explicitly.
-            channel_states[self.channel_states.index
-                           .values.tolist()] = self.channel_states
+            with self.control_board.transaction_lock:
+                # Save original state to restore later.
+                original_state = self.control_board.state
+                channel_states = self.control_board.state_of_channels
 
-            # enable high voltage
-            if not self.control_board.hv_output_enabled:
-                # XXX Only set if necessary, since there is a ~200 ms delay.
-                self.control_board.hv_output_enabled = True
+                options = plugin.get_step_options()
+                try:
+                    states = options['electrode_states'].copy()
+                    # Index requested actuation states by channel rather than
+                    # electrode.
+                    app = get_app()
+                    states.index = (app.dmf_device.channels_by_electrode
+                                    .loc[states.index])
 
-            # set the voltage and frequency specified for the current step
-            options = self.get_step_options()
-            emit_signal("set_frequency",
-                        options['frequency'],
-                        interface=IWaveformGenerator)
-            emit_signal("set_voltage", options['voltage'],
-                        interface=IWaveformGenerator)
+                    actuated_electrodes = \
+                        db.threshold.actuate_channels(self.control_board,
+                                                      states[states > 0].index,
+                                                      timeout=5)
 
-            # perform the capacitance measurement
-            self.control_board.set_state_of_channels(channel_states)
-            c = self.control_board.measure_capacitance()
-            _L().info("on_measure_%s_capacitance: {}F/%.1f mm^2 = {}F/mm^2",
-                      name, si.si_format(c), self.actuated_area,
-                      si.si_format(c / self.actuated_area))
-            app_values = {}
-            app_values['c_%s' % name] = c / self.actuated_area
-            self.set_app_values(app_values)
+                    if not actuated_electrodes:
+                        _L().error('At least one electrode must be actuated to'
+                                   ' perform calibration.')
+                        return
 
-            # send a signal to update the gui
-            emit_signal('on_device_capacitance_update', c)
+                    # Set output voltage and frequency.
+                    emit_signal("set_frequency",
+                                options['Frequency (Hz)'],
+                                interface=IWaveformGenerator)
+                    emit_signal("set_voltage", options['Voltage (V)'],
+                                interface=IWaveformGenerator)
 
-            # Turn off all electrodes and disable high voltage if we're
-            # not in realtime mode.
-            if not get_app().realtime_mode:
-                self.control_board.hv_output_enabled = False
-                self.control_board.set_state_of_channels(
-                    np.zeros(max_channels, dtype=int))
+                    # Measure absolute capacitance and compute _specific_
+                    # capacitance (i.e., capacitance per mm^2).
+                    c = self.control_board.measure_capacitance()
+                    app_values = {}
+                    app_values['c_%s' % name] = c / self.actuated_area
+                    self.set_app_values(app_values)
+
+                    message = ('Measured %s capacitance: %sF/%.1f mm^2 = %sF/mm^2'
+                            % (name, si.si_format(c), self.actuated_area,
+                                si.si_format(c / self.actuated_area)))
+                    _L().info(message)
+                    gtk_threadsafe(self.push_status)(message, 10, False)
+
+                    # send a signal to update the gui
+                    emit_signal('on_device_capacitance_update', c)
+                finally:
+                    # Restore original control board state.
+                    state = self.control_board.state
+                    if not (state == original_state).all():
+                        self.control_board.state = \
+                            original_state[state != original_state]
+                    self.control_board.state_of_channels = channel_states
 
     def on_measure_liquid_capacitance(self):
         '''
@@ -1574,274 +1527,6 @@ cables and plug back in).'''
         '''
         self._calibrate_device_capacitance('filler')
 
-    @require_connection(log_level='info')  # Log if DropBot is not connected.
-    def _apply_state(self):
-        '''
-        .. versionchanged:: 2.25
-            Use :meth:`_on_step_capacitance_updated` callback to add current
-            list of actuated channels and associated actuated area to
-            capacitance update message.
-
-        .. versionchanged:: 2.26
-            Clear :attr:`_state_applied` event since new state is being
-            applied.
-        '''
-        self.capacitance_exceeded.clear()
-        self._state_applied.clear()
-        options = self.get_step_options()
-        max_channels = self.control_board.number_of_channels
-        # All channels should default to off.
-        channel_states = np.zeros(max_channels, dtype=int)
-        # Set the state of any channels that have been set explicitly.
-        channel_states[self.channel_states.index
-                       .values.tolist()] = self.channel_states
-
-        emit_signal("set_frequency",
-                    options['frequency'],
-                    interface=IWaveformGenerator)
-        emit_signal("set_voltage", options['voltage'],
-                    interface=IWaveformGenerator)
-        if not self.control_board.hv_output_enabled:
-            # XXX Only set if necessary, since there is a ~200 ms delay.
-            self.control_board.hv_output_enabled = True
-
-        logger = _L()  # use logger with method context
-        self.control_board.set_state_of_channels(channel_states)
-        if logging.getLogger().isEnabledFor(logging.DEBUG):
-            logger.debug('Actuate channels: %s', np.where(channel_states)[0])
-            logger.debug('DropBot state:')
-            map(logger.debug, str(self.control_board.state).splitlines())
-
-        # Connect to `capacitance-updated` signal to record capacitance
-        # values measured during the step.
-        (self.control_board.signals.signal('capacitance-updated')
-         .connect(self._on_step_capacitance_updated, weak=False))
-        logger.info('connected capacitance updated signal callback')
-
-    def on_step_run(self):
-        '''
-        Handler called whenever a step is executed.
-
-        Plugins that handle this signal must emit the on_step_complete
-        signal once they have completed the step. The protocol controller
-        will wait until all plugins have completed the current step before
-        proceeding.
-
-        .. versionchanged:: 0.14
-            Schedule update of control board status label in main GTK thread.
-
-        .. versionchanged:: 0.18
-            Do not update control board status label.
-
-            Instead, status is updated when capacitance is measured a) after
-            actuation in real-time mode, or b) after step duration is complete
-            when protocol is running.
-
-        .. versionchanged:: 2.24
-            Use a thread and corresponding :class:`threading.Event` instances
-            to watch for the threshold capacitance (if set) to be reached.  If
-            the threshold is not met by the specified duration of the step,
-            time out and stop the protocol.
-
-        .. versionchanged:: 2.25.2
-            Connect to ``capacitance-updated`` event (in addition to
-            ``capacitance-exceeded`` event) to check against target
-            capacitance.
-
-        .. versionchanged:: 2.26
-            Wait for :attr:`_state_applied` event to ensure pending electrode
-            actuations have completed before computing target capacitance based
-
-            Require **5 consecutive** capacitance updates above the target
-            threshold to trigger step completion.  This increases confidence
-            that the target capacitance has actually been met.
-
-        .. versionchanged:: 2.27
-            Wait in separate thread for channel states to be applied. This
-            allows GTK events and step handling of other plugins to execute
-            concurrently.
-        '''
-        self._kill_running_step()
-        self.step_cancelled.clear()
-        self._step_uuid = uuid.uuid5(uuid.uuid1(), 'dropbot_plugin')
-
-        def _wait_for_channel_states():
-            event = or_event.OrEvent(self.step_cancelled,
-                                     self._channel_states_received)
-            # Wait for channel states to be received.
-            event.wait()
-
-            if self.step_cancelled.is_set():
-                self.complete_step()
-            else:
-                # Channel states have been received.  Execute step.
-                gtk_threadsafe(self._execute_step)()
-
-        thread = threading.Thread(target=_wait_for_channel_states)
-        thread.daemon = True
-        thread.start()
-
-    @gtk_threadsafe
-    def _execute_step(self):
-        '''
-        Execute step only after channel states have been received.
-
-        .. versionadded:: 2.27
-        '''
-        def _delay_completion(duration_s):
-            '''
-            Delay until either a) specified duration has passed; or b) step has
-            been cancelled.
-            '''
-            step_uuid = self._step_uuid
-
-            def _wait_for_cancelled():
-                if self.step_cancelled.wait(duration_s):
-                    self.step_cancelled.clear()
-                    # Step was cancelled.
-                    _L().info('Step was cancelled.')
-                    self._kill_running_step()
-                elif step_uuid == self._step_uuid:
-                    _L().info('Complete step after %ss', si.si_format(duration_s))
-                    self.complete_step()
-
-            thread = threading.Thread(target=_wait_for_cancelled)
-            thread.daemon = True
-            thread.start()
-
-        # Clear step cancelled signal.
-        self.step_cancelled.clear()
-        app = get_app()
-
-        if app.realtime_mode or app.running:
-            self._apply_state()
-
-        if app.realtime_mode and not app.running:
-            # Measure the voltage and capacitance and update the GUI.
-            self.measure_capacitance()
-
-        if not app.running:
-            # Protocol is not running so do not apply capacitance threshold or
-            # duration.
-            self.complete_step()
-        else:
-            options = self.get_step_options()
-            app_values = self.get_app_values()
-
-            # Criteria that must be met to set target capacitance.
-            threshold_criteria = [options['volume_threshold'] > 0,
-                                  self.actuated_area > 0,
-                                  app_values['c_liquid'] > 0]
-
-            if not self.dropbot_connected.is_set():
-                if options['volume_threshold'] > 0:
-                    # Volume threshold is set.  Treat `duration` as maximum
-                    # duration and continue immediately.
-                    self.complete_step()
-                else:
-                    # DropBot is not connected.  Delay for specified duration.
-                    _delay_completion(options['duration'] * 1e-3)
-            elif all(threshold_criteria):
-                # A volume threshold has been set for this step.
-
-                # Calculate target capacitance based on actuated area.
-                #
-                # Note: `app_values['c_liquid']` represents a *specific
-                # capacitance*, i.e., has units of $F/mm^2$.
-                duration_s = options['duration'] * 1e-3
-                if self._state_applied.wait(duration_s):
-                    target_capacitance = (options['volume_threshold'] *
-                                        self.actuated_area *
-                                        app_values['c_liquid'])
-                    _L().info('target capacitance: %sF (actuated area: %s mm^2'
-                              ', actuated channels: %s)',
-                              si.si_format(target_capacitance),
-                              self.actuated_area, self.actuated_channels)
-                else:
-                    # Timed out waiting for capacitance.
-                    # XXX Include the value of the capacitance that *was*
-                    # reached in the log message.
-                    _L().warn('Timed out waiting for DropBot to apply '
-                              'requested settings.')
-                    self.complete_step('Fail')
-                    return
-
-                def _wait_for_target_capacitance():
-                    _L().debug('thread started: %s', thread.get_ident())
-                    self.capacitance_watch_finished.clear()
-                    event = or_event.OrEvent(self.step_cancelled,
-                                             self.capacitance_exceeded)
-                    capacitance_window = deque()
-                    N = 5
-
-                    # Connect capacitance updates callback to check against
-                    # target capacitance.
-                    def _check_threshold(message):
-                        capacitance_window.appendleft(message['new_value'])
-                        if len(capacitance_window) > N:
-                            capacitance_window.pop()
-                        self.capacitance_exceeded.window = \
-                            list(capacitance_window)
-                        stable_capacitance = min(self.capacitance_exceeded
-                                                 .window)
-
-                        if all([len(capacitance_window) >= N,
-                                stable_capacitance > target_capacitance]):
-                            message['new_value'] = stable_capacitance
-                            self.capacitance_exceeded.set()
-                            self.capacitance_exceeded.result = message
-
-                    (self.control_board.signals.signal('capacitance-updated')
-                     .connect(_check_threshold, weak=False))
-
-                    if event.wait(duration_s):
-                        if self.capacitance_exceeded.is_set():
-                            self.capacitance_exceeded.clear()
-                            capacitance = (self.capacitance_exceeded
-                                           .result['new_value'])
-                            # Step was completed successfully within specified
-                            # duration.
-                            _L().info('Target capacitance was reached: %sF > '
-                                      '%sF (window: %s)',
-                                      *(map(si.si_format,
-                                            (capacitance, target_capacitance))
-                                        + [map(si.si_format,
-                                               self.capacitance_exceeded
-                                               .window)]))
-                            gtk_threadsafe(self.complete_step)()
-                        elif self.step_cancelled.is_set():
-                            # Step was cancelled.
-                            _L().info('Step was cancelled.')
-                    else:
-                        # Timed out waiting for capacitance.
-                        # XXX Include the value of the capacitance that *was*
-                        # reached in the log message.
-                        _L().warn('Timed out.  Capacitance %sF did not reach '
-                                  'target of %sF after %ss.',
-                                  *map(si.si_format,
-                                       (min(capacitance_window),
-                                        target_capacitance, duration_s)))
-                        gtk_threadsafe(self.complete_step)('Fail')
-
-                    # Disconnect capacitance updates callback.
-                    (self.control_board.signals.signal('capacitance-updated')
-                     .disconnect(_check_threshold))
-
-                    # Signal that capacitance watch thread has completed.
-                    self.capacitance_watch_finished.set()
-                    _L().debug('thread finished: %s', thread.get_ident())
-
-                # Start thread to wait for target capacitance to be met.
-                self.capacitance_watch_thread = \
-                    threading.Thread(target=_wait_for_target_capacitance)
-                # Stop when main thread exits.
-                self.capacitance_watch_thread.daemon = True
-                self.capacitance_watch_thread.start()
-            else:
-                _L().info('actuated area: %s mm^2', self.actuated_area)
-                _delay_completion(options['duration'] * 1e-3)
-
-    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def log_capacitance_updates(self, capacitance_updates):
         '''
         .. versionadded:: 2.24
@@ -1863,6 +1548,9 @@ cables and plug back in).'''
             Remove ``sampling_rate_hz`` column.  Move ``capacitance`` column to
             index 1 (adjacent to ``timestamp_utc`` column).
         '''
+        logger = _L()  # use logger with method context
+        logger.debug('logging %s capacitance updates',
+                     len(capacitance_updates))
         app = get_app()
 
         # Append data to CSV file.
@@ -1883,78 +1571,25 @@ cables and plug back in).'''
         # stored in `timestamp_utc`.
         df.drop(['time_us'], axis=1, inplace=True)
 
-        # Use `compresslevel=1` to prioritize compression speed while still
-        # significantly reducing the output file size compared to no
-        # compression.
-        #
-        # See [here][1] for some supporting motivation.
-        #
-        # [1]: https://github.com/gruntjs/grunt-contrib-compress/issues/116#issuecomment-70883022
-        with gzip.open(csv_output_path, 'a', compresslevel=1) as output:
-            df.to_csv(output, index=False, header=include_header)
-
-    def _on_step_capacitance_updated(self, message):
-        '''
-        .. versionadded:: 2.25
-
-
-        Callback for ``capacitance-updated`` DropBot device events (only called
-        when step is running).
-
-        Add current list of actuated channels and associated actuated electrode
-        area to capacitance update message and add message to list of updates
-        for the currently running step.
-        '''
-        message['actuated_channels'] = self.actuated_channels
-        message['actuated_area'] = self.actuated_area
-        self._step_capacitances.append(message)
-
-    def complete_step(self, return_value=None):
-        self._channel_states_received.clear()
-        self.timeout_id = None
-        app = get_app()
-        if app.running or app.realtime_mode:
-            if self.dropbot_connected.is_set():
-                # Disconnect from `capacitance-updated` signal to stop
-                # recording capacitance values now that the step has finished.
-                (self.control_board.signals.signal('capacitance-updated')
-                 .disconnect(self._on_step_capacitance_updated))
-            if self._step_capacitances:
-                self.log_capacitance_updates(self._step_capacitances)
-                _L().info('logged %d capacitance readings.',
-                          len(self._step_capacitances))
-                self._step_capacitances = []
-            emit_signal('on_step_complete', [self.name, return_value])
-
-    def _kill_running_step(self):
-        '''
-        .. versionchanged:: 2.25
-            Stop recording capacitance updates.
-
-        .. versionchanged:: 2.26
-            Clear :attr:`_state_applied` event.
-
-        .. versionchanged:: 2.27
-            Clear :attr:`_channel_states_received` event.
-        '''
-        self._step_thread = None
-        self._state_applied.clear()
-        if self.timeout_id:
-            _L().debug('remove timeout_id=%d', self.timeout_id)
-            gobject.source_remove(self.timeout_id)
-        # Signal that step has been cancelled.
-        self.step_cancelled.set()
-        # Wait for capacitance threshold watching thread to stop.
-        self.capacitance_watch_finished.wait()
-        if self.dropbot_connected.is_set():
-            # Stop recording capacitance updates.
-            (self.control_board.signals.signal('capacitance-updated')
-             .disconnect(self._step_capacitances.append))
+        with self._capacitance_log_lock:
+            # Use `compresslevel=1` to prioritize compression speed while still
+            # significantly reducing the output file size compared to no
+            # compression.
+            #
+            # See [here][1] for some supporting motivation.
+            #
+            # [1]: https://github.com/gruntjs/grunt-contrib-compress/issues/116#issuecomment-70883022
+            with gzip.open(csv_output_path, 'a', compresslevel=1) as output:
+                df.to_csv(output, index=False, header=include_header)
+        logger.info('logged %s capacitance updates to `%s`', df.shape[0],
+                    csv_output_path)
 
     def on_protocol_run(self):
         """
         Handler called when a protocol starts running.
         """
+        # XXX TODO 2.33 refactor to implement `IApplicationMode` interface
+        # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
         app = get_app()
         if not self.dropbot_connected.is_set():
             _L().warning("Warning: no control board connected.")
@@ -1967,21 +1602,13 @@ cables and plug back in).'''
         """
         Handler called when a protocol is paused.
         """
+        # XXX TODO 2.33 refactor to implement `IApplicationMode` interface
+        # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
         app = get_app()
-        self._kill_running_step()
         if self.dropbot_connected.is_set() and not app.realtime_mode:
             # Turn off all electrodes
             _L().debug('Turning off all electrodes.')
             self.control_board.hv_output_enabled = False
-
-    def on_experiment_log_selection_changed(self, data):
-        """
-        Handler called whenever the experiment log selection changes.
-
-        Parameters:
-            data : dictionary of experiment log data for the selected steps
-        """
-        pass
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_voltage(self, voltage):
@@ -1990,9 +1617,26 @@ cables and plug back in).'''
 
         Parameters:
             voltage : RMS voltage
+
+
+        .. versionchanged:: 2.33
+            Ensure high-voltage output is turned on and enabled.
         """
-        _L().info("%.1f", voltage)
-        self.control_board.voltage = voltage
+        _L().debug("%.1f", voltage)
+
+        with self.control_board.transaction_lock:
+            original_state = self.control_board.state
+
+            # Construct required state
+            state = original_state.copy()
+            state.hv_output_enabled = True
+            state.hv_output_selected = True
+
+            if not (state == original_state).all():
+                # Update modified state properties.
+                self.control_board.state = state[state != original_state]
+
+            self.control_board.voltage = voltage
 
         # Cache measured actuation voltage. Delay before measuring the
         # actuation voltage to give it time to settle.
@@ -2008,22 +1652,147 @@ cables and plug back in).'''
         Parameters:
             frequency : frequency in Hz
         """
-        _L().info("%.1f", frequency)
+        _L().debug("%.1f", frequency)
         self.control_board.frequency = frequency
         self.current_frequency = frequency
 
-    def on_step_options_changed(self, plugin, step_number):
-        app = get_app()
-        if (app.protocol and not app.running and not app.realtime_mode and
-            (plugin == 'microdrop.gui.dmf_device_controller' or plugin ==
-             self.name) and app.protocol.current_step_number == step_number):
-            _L().info('%s step #%d', plugin, step_number)
-            self.on_step_run()
+    @asyncio.coroutine
+    def on_actuation_request(self, electrode_states, duration_s=0):
+        '''
+        XXX Coroutine XXX
 
-    def on_step_swapped(self, original_step_number, new_step_number):
-        _L().info('%d -> %d', original_step_number, new_step_number)
-        self.on_step_options_changed(self.name,
-                                     get_app().protocol.current_step_number)
+        Actuate electrodes according to specified states.
+
+        Parameters
+        ----------
+        electrode_states : pandas.Series
+        duration_s : float, optional
+            If ``volume_threshold`` step option is set, maximum duration before
+            timing out.  Otherwise, time to actuate before actuation is
+            considered completed.
+
+        Returns
+        -------
+        actuated_electrodes : list
+            List of actuated electrode IDs.
+
+
+        .. versionadded:: 2.33
+        '''
+        if not self.dropbot_connected.is_set():
+            raise RuntimeError('DropBot not connected.')
+
+        app = get_app()
+        options = self.get_step_options()
+        app_values = self.get_app_values()
+        requested_electrodes = electrode_states[electrode_states > 0].index
+        requested_channels = (app.dmf_device.channels_by_electrode
+                              .loc[requested_electrodes])
+
+        # Criteria that must be met to set target capacitance.
+        threshold_criteria = [app.running, duration_s > 0,
+                              options['volume_threshold'] > 0,
+                              len(requested_electrodes) > 0,
+                              app_values['c_liquid'] > 0]
+
+        if not all(threshold_criteria):
+            # ## Case 1: no volume threshold specified.
+            #  1. Set control board state of channels according to requested
+            #     actuation states.
+            #  2. Wait for channels to be actuated.
+            actuated_channels = \
+                db.threshold.actuate_channels(self.control_board,
+                                              requested_channels, timeout=5)
+
+            #  3. Connect to `capacitance-updated` signal to record capacitance
+            #     values measured during the step.
+            capacitance_messages = []
+
+            def _on_capacitance_updated(message):
+                message['actuated_channels'] = self.actuated_channels
+                message['actuated_area'] = self.actuated_area
+                capacitance_messages.append(message)
+
+            (self.control_board.signals.signal('capacitance-updated')
+             .connect(_on_capacitance_updated))
+            #  4. Delay for specified duration.
+            try:
+                yield asyncio.From(asyncio.sleep(duration_s))
+            finally:
+                (self.control_board.signals.signal('capacitance-updated')
+                 .disconnect(_on_capacitance_updated))
+        else:
+            # ## Case 2: volume threshold specified.
+            #
+            # A volume threshold has been set for this step.
+
+            # Calculate target capacitance based on actuated area.
+            #
+            # Note: `app_values['c_liquid']` represents a *specific
+            # capacitance*, i.e., has units of $F/mm^2$.
+            actuated_areas = (app.dmf_device.electrode_areas
+                              .ix[requested_electrodes.values])
+            actuated_area = actuated_areas.sum()
+
+            meters_squared_area = actuated_area * (1e-3 ** 2)  # m^2 area
+            # Approximate length of unit side in SI units.
+            si_length, pow10 = si.split(np.sqrt(meters_squared_area))
+            si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 + pow10 /
+                                         3]
+
+            target_capacitance = (options['volume_threshold'] * actuated_area *
+                                  app_values['c_liquid'])
+
+            logger = _L()  # use logger with function context
+            if logger.getEffectiveLevel() <= logging.DEBUG:
+                message = ('target capacitance: %sF (actuated area: (%.1f '
+                           '%sm^2) actuated channels: %s)' %
+                           (si.si_format(target_capacitance), si_length ** 2,
+                            si_unit, requested_channels))
+                map(logger.debug, message.splitlines())
+            # Wait for target capacitance to be reached in background thread,
+            # timing out if the specified duration is exceeded.
+            co_future = \
+                db.threshold.co_target_capacitance(self.control_board,
+                                                   requested_channels,
+                                                   target_capacitance,
+                                                   allow_disabled=False,
+                                                   timeout=duration_s)
+            try:
+                dropbot_event = yield asyncio.From(asyncio
+                                                   .wait_for(co_future,
+                                                             duration_s))
+                _L().debug('target capacitance reached: `%s`', dropbot_event)
+                actuated_channels = dropbot_event['actuated_channels']
+
+                capacitance_messages = dropbot_event['capacitance_updates']
+                # Add actuated area to capacitance update messages.
+                for capacitance_i in capacitance_messages:
+                    capacitance_i['acuated_area'] = actuated_area
+
+                # Show notification in main window status bar.
+                status = ('reached %sF (> %sF) over electrodes: %s (%.1f '
+                          '%sm^2) after %ss' %
+                          (si.si_format(dropbot_event['new_value']),
+                           si.si_format(dropbot_event['target']),
+                           actuated_channels, si_length ** 2, si_unit,
+                           (dropbot_event['end'] -
+                            dropbot_event['start']).total_seconds()))
+                gtk_threadsafe(self.push_status)(status, 5, False)
+            except asyncio.TimeoutError:
+                raise RuntimeError('Timed out waiting for target capacitance.')
+
+        actuated_electrodes = (app.dmf_device.electrodes_by_channel
+                               .loc[actuated_channels])
+
+        # Write capacitance updates to log in background thread.
+        self.executor.submit(self.log_capacitance_updates,
+                             capacitance_messages)
+
+        # Return list of actuated channels (which _may_ be fewer than the
+        # number of requested actuated channels if one or more channels is
+        # _disabled_).
+        raise asyncio.Return(actuated_electrodes)
 
     def on_experiment_log_changed(self, log):
         '''
@@ -2094,6 +1863,8 @@ cables and plug back in).'''
         '''
         .. versionadded:: 0.18
         '''
+        # XXX TODO add event to indicate if `c_liquid` has been confirmed; either by prompting to use cached value or by measuring new value.
+        # XXX TODO add event to indicate if `c_filler` has been confirmed; either by prompting to use cached value or by measuring new value.
         app_values = self.get_app_values()
         if (self.dropbot_connected.is_set() and (app_values['c_liquid'] > 0 or
                                                  app_values['c_filler'] > 0)):
@@ -2108,15 +1879,7 @@ cables and plug back in).'''
         Returns a list of scheduling requests (i.e., ScheduleRequest
         instances) for the function specified by function_name.
         """
-        if function_name in ['on_step_options_changed']:
-            return [ScheduleRequest(self.name,
-                                    'microdrop.gui.protocol_grid_controller'),
-                    ScheduleRequest(self.name,
-                                    'microdrop.gui.protocol_controller'),
-                    ]
-        elif function_name == 'on_step_run':
-            return [ScheduleRequest('droplet_planning_plugin', self.name)]
-        elif function_name == 'on_app_options_changed':
+        if function_name == 'on_app_options_changed':
             return [ScheduleRequest('microdrop.app', self.name)]
         elif function_name == 'on_protocol_swapped':
             return [ScheduleRequest('microdrop.gui.protocol_grid_controller',
