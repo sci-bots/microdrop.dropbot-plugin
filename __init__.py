@@ -396,7 +396,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         the StepFields member (vs through the get_step_form_class method).
 
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.33
             Deprecate all step fields _except_ ``volume_threshold`` as part of
             refactoring to implement `IElectrodeActuator` interface.
         """
@@ -446,9 +446,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # base class listed.
         gobject.GObject.__init__(self)
 
-        #: ..versionadded:: X.X.X
+        #: ..versionadded:: 2.33
         self.executor = ThreadPoolExecutor()
-        #: ..versionadded:: X.X.X
+        #: ..versionadded:: 2.33
         self._capacitance_log_lock = threading.Lock()
 
         self.control_board = None
@@ -488,7 +488,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.capacitance_watch_thread = None
         #: .. versionadded:: 2.24
         self.capacitance_exceeded = threading.Event()
-        #: .. versionadded:: X.X.X
+        #: .. versionadded:: 2.33
         self._actuation_completed = threading.Event()
 
         self.chip_watch_thread = None
@@ -1129,7 +1129,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Emit ``dropbot-disconnected`` ``gsignal`` after closing DropBot
             connection.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.33
             Delegate all clean-up to :meth:`cleanup_plugin()`.
         """
         self.cleanup_plugin()
@@ -1209,7 +1209,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 long as base minor versions are equal, i.e., assume API is
                 backwards compatible.
 
-            .. versionchanged:: X.X.X
+            .. versionchanged:: 2.33
                 Fix connection of DropBot signals when plugin is disabled and
                 re-enabled.
             '''
@@ -1451,7 +1451,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         .. versionadded:: 0.18
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.33
             Refactor to use ``microdrop.electrode_controller_plugin`` step
             options for frequency, voltage, and channels.
         '''
@@ -1588,7 +1588,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         Handler called when a protocol starts running.
         """
-        # XXX TODO X.X.X refactor to implement `IApplicationMode` interface
+        # XXX TODO 2.33 refactor to implement `IApplicationMode` interface
         # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
         app = get_app()
         if not self.dropbot_connected.is_set():
@@ -1602,7 +1602,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         Handler called when a protocol is paused.
         """
-        # XXX TODO X.X.X refactor to implement `IApplicationMode` interface
+        # XXX TODO 2.33 refactor to implement `IApplicationMode` interface
         # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
         app = get_app()
         if self.dropbot_connected.is_set() and not app.realtime_mode:
@@ -1619,7 +1619,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             voltage : RMS voltage
 
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.33
             Ensure high-voltage output is turned on and enabled.
         """
         _L().debug("%.1f", voltage)
@@ -1675,10 +1675,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         -------
         actuated_electrodes : list
             List of actuated electrode IDs.
-        '''
 
-        # XXX TODO Connect to `capacitance-updated` signal to record capacitance values measured during actuation.
-        # XXX TODO Maybe send blinker `actuation-completed(actuated_channels, capacitance_updates)` signal? See https://trello.com/c/tAroYIwt
+
+        .. versionadded:: 2.33
+        '''
         if not self.dropbot_connected.is_set():
             raise RuntimeError('DropBot not connected.')
 
