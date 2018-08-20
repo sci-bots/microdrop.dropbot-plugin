@@ -40,7 +40,8 @@ from logging_helpers import _L  #: .. versionadded:: 2.24
 from microdrop.app_context import get_app, get_hub_uri
 from microdrop.interfaces import (IElectrodeActuator, IPlugin,
                                   IWaveformGenerator)
-from microdrop.plugin_helpers import (StepOptionsController, AppDataController)
+from microdrop.plugin_helpers import (StepOptionsController, AppDataController,
+                                      hub_execute)
 from microdrop.plugin_manager import (Plugin, implements, PluginGlobals,
                                       ScheduleRequest, emit_signal,
                                       get_service_instance_by_name)
@@ -119,30 +120,13 @@ class DmfZmqPlugin(ZmqPlugin):
             pass
         else:
             self.on_command_recv(msg_frames)
-
-        try:
-            msg_frames = self.subscribe_socket.recv_multipart(zmq.NOBLOCK)
-            source, target, msg_type, msg_json = msg_frames
-            if all([source == 'microdrop.electrode_controller_plugin',
-                    msg_type == 'execute_reply']):
-                # The 'microdrop.electrode_controller_plugin' plugin maintains
-                # the requested state of each electrode.
-                msg = json.loads(msg_json)
-            elif all([source == 'dmf_device_ui_plugin',
-                      msg_type == 'execute_request']):
-                msg = json.loads(msg_json)
-                cmd = msg['content']['command']
-                if cmd in ('measure_liquid_capacitance',
-                           'measure_filler_capacitance'):
-                    getattr(self.parent, 'on_%s' % cmd)()
-            else:
-                self.most_recent = msg_json
-        except zmq.Again:
-            pass
-        except Exception:
-            _L().error('Error processing message from subscription socket.',
-                       exc_info=True)
         return True
+
+    def on_execute__measure_liquid_capacitance(self, request):
+        self.parent.on_measure_liquid_capacitance()
+
+    def on_execute__measure_filler_capacitance(self, request):
+        self.parent.on_measure_filler_capacitance()
 
 
 def max_voltage(element, state):
@@ -1108,8 +1092,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.update_connection_status()
 
         # Initialize 0MQ hub plugin and subscribe to hub messages.
-        self.plugin = DmfZmqPlugin(self, self.name, get_hub_uri(),
-                                   subscribe_options={zmq.SUBSCRIBE: ''})
+        self.plugin = DmfZmqPlugin(self, self.name, get_hub_uri())
         # Initialize sockets.
         self.plugin.reset()
 
@@ -1117,6 +1100,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.plugin_timeout_id = gtk.timeout_add(10, self.plugin.check_sockets)
 
         self.connect_dropbot()
+
+        # Register electrode commands.
+        for medium in ('liquid', 'filler'):
+            hub_execute('microdrop.command_plugin', 'register_command',
+                        command_name='measure_%s_capacitance' % medium,
+                        namespace='global', plugin_name=self.name,
+                        title='Measure _%s capacitance' % medium)
 
     def on_plugin_disable(self):
         self.cleanup_plugin()
@@ -1878,6 +1868,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         Returns a list of scheduling requests (i.e., ScheduleRequest
         instances) for the function specified by function_name.
+
+
+        .. versionadded:: 2.34
+            Enable _after_ command plugin and zmq hub to ensure command can be
+            registered.
+        '''
         """
         if function_name == 'on_app_options_changed':
             return [ScheduleRequest('microdrop.app', self.name)]
@@ -1887,6 +1883,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         elif function_name == 'on_app_exit':
             return [ScheduleRequest('microdrop.gui.experiment_log_controller',
                                     self.name)]
+        elif function_name == 'on_plugin_enable':
+            return [ScheduleRequest(p, self.name)
+                    for p in ('microdrop.zmq_hub_plugin',
+                              'microdrop.command_plugin')]
         return []
 
 
