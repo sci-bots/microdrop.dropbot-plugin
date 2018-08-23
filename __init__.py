@@ -971,19 +971,30 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 0.16
             Prompt user to insert DropBot test board before running channels
             test.
+
+        .. versionchanged:: X.X.X
+            Add ``_DropBot help...`` entry to main window ``Help`` menu.
         '''
+        # Add DropBot help entry to main window `Help` menu.
+        menu_item = gtk.MenuItem('_DropBot help...')
+        help_url = 'https://sci-bots.com/dropbot'
+        menu_item.connect('activate', lambda menu_item:
+                          webbrowser.open_new_tab(help_url))
+        app = get_app()
+        main_help_menu = app.builder.get_object('menu_help')
+        main_help_menu.insert(menu_item, len(main_help_menu.get_children()) -
+                              1)
+        menu_item.show()
+
         # Create head for DropBot on-board tests sub-menu.
         tests_menu_head = gtk.MenuItem('On-board self-_tests')
 
-        # Create main DropBot menu.
+        # Create DropBot tools menu.
         self.menu_items = [gtk.MenuItem('Run _all on-board self-tests...'),
-                           gtk.MenuItem('_Help...'),
-                           gtk.SeparatorMenuItem(), tests_menu_head]
+                           tests_menu_head]
         self.menu_items[0].connect('activate', lambda menu_item:
                                    self.run_all_tests())
-        help_url = 'https://github.com/sci-bots/microdrop.dropbot-plugin/wiki/Quick-start-guide'
-        self.menu_items[1].connect('activate', lambda menu_item:
-                                   webbrowser.open_new_tab(help_url))
+
         app = get_app()
         self.menu = gtk.Menu()
         self.menu.show_all()
