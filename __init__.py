@@ -1047,13 +1047,16 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Add capacitance update interval, i.e., ``c_update_ms``, specifying
             the interval to request the DropBot to send capacitance measurement
             updates.
+
+        .. versionchanged:: X.X.X
+            Do not enable ``"Auto-run diagnostic tests"`` by default.
         '''
         return Form.of(
             Float.named('default_duration').using(default=1000, optional=True),
             Float.named('default_voltage').using(default=80, optional=True),
             Float.named('default_frequency').using(default=10e3,
                                                    optional=True),
-            Boolean.named('Auto-run diagnostic tests').using(default=True,
+            Boolean.named('Auto-run diagnostic tests').using(default=False,
                                                              optional=True),
             #: .. versionadded:: 0.18
             Float.named('c_liquid').using(default=0, optional=True,
