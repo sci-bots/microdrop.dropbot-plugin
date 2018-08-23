@@ -972,7 +972,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Prompt user to insert DropBot test board before running channels
             test.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.34.1
             Add ``_DropBot help...`` entry to main window ``Help`` menu.
         '''
         # Add DropBot help entry to main window `Help` menu.
@@ -1048,7 +1048,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             the interval to request the DropBot to send capacitance measurement
             updates.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.34.1
             Do not enable ``"Auto-run diagnostic tests"`` by default.
         '''
         return Form.of(
