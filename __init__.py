@@ -49,7 +49,7 @@ from microdrop.plugin_manager import (Plugin, implements, PluginGlobals,
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
-from pygtkhelpers.utils import gsignal
+from pygtkhelpers.utils import gsignal, refresh_gui
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 import base_node_rpc as bnr
 import blinker
@@ -1801,7 +1801,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # _disabled_).
         raise asyncio.Return(actuated_electrodes)
 
-    @gtk_threadsafe
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def on_experiment_log_changed(self, log):
         '''
@@ -1847,42 +1846,84 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         app_values = self.get_app_values()
         if app_values.get('Auto-run diagnostic tests'):
             _L().info('Running diagnostic tests')
-            signals = blinker.Namespace()
+            tests = ['system_info',
+                     'test_i2c',
+                     'test_voltage',
+                     'test_shorts',
+                     'test_on_board_feedback_calibration']
+            future = self.run_tests(tests)
+            # XXX Execute pending GTK events to update progress dialog until
+            # tests are completed.
+            while not future.done():
+                while gtk.events_pending():
+                    gtk.main_iteration_do(block=False)
+                time.sleep(.01)
+        self._use_cached_capacitance_prompt()
 
-            @asyncio.coroutine
-            def _run_tests():
-                tests = ['system_info',
-                         'test_i2c',
-                         'test_voltage',
-                         'test_shorts',
-                         'test_on_board_feedback_calibration']
-                results = {}
+    @require_connection()  # Display error dialog if DropBot is not connected.
+    def run_tests(self, tests=None):
+        '''
+        .. versionadded:: X.X.X
 
-                try:
-                    with self.control_board.transaction_lock:
-                        for i, test in enumerate(tests):
-                            test_func = getattr(db.hardware_test, test)
-                            signals.signal('test-started')\
-                                .send({'test': test, 'completed': i,
-                                       'total': len(tests)})
-                            results[test] = test_func(self.control_board)
-                            signals.signal('test-completed')\
-                                .send({'test': test, 'completed': i + 1,
-                                       'total': len(tests),
-                                       'results': results})
+        Execute DropBot self-tests while display progress in a dialog.
 
-                            # Yield control to asyncio event loop.
-                            yield asyncio.From(asyncio.sleep(0))
-                finally:
-                    if results:
-                        # Log results of completed tests.
-                        db.hardware_test.log_results(results,
-                                                     self
-                                                     .diagnostics_results_dir)
-                        _L().info('Logged results to: `%s`',
-                                  self.diagnostics_results_dir.realpath())
-                raise asyncio.Return(results)
+        Allow user to cancel (logging test results for any completed tests).
 
+        Parameters
+        ----------
+        tests : list, optional
+            List of DropBot self-tests to run (e.g., ``'system_info'``,
+            ``'test_i2c'``, etc.).  By default, run _all_ tests.
+
+        Returns
+        -------
+        concurrent.futures.Future
+            Asynchronous results of tests.  The `result()` method may be used
+            to block until tests are complete, **_but_** **MUST** not be called
+            from the GTK main thread, since doing so would prevent the progress
+            dialog from displaying/updating.
+        '''
+        if tests is None:
+            tests = db.self_test.ALL_TESTS
+
+        signals = blinker.Namespace()
+
+        @asyncio.coroutine
+        def _run_tests():
+            results = {}
+
+            try:
+                for i, test in enumerate(tests):
+                    test_func = getattr(db.hardware_test, test)
+                    signals.signal('test-started')\
+                        .send({'test': test, 'completed': i,
+                                'total': len(tests)})
+                    results[test] = test_func(self.control_board)
+                    signals.signal('test-completed')\
+                        .send({'test': test, 'completed': i + 1,
+                                'total': len(tests), 'results': results})
+                    # Yield control to asyncio event loop.  This provides
+                    # breakpoints where the coroutine may be cancelled.
+                    yield asyncio.From(asyncio.sleep(0))
+            except asyncio.CancelledError:
+                # Gracefully exit if task is cancelled, returning results of
+                # completed tests.
+                pass
+            finally:
+                if results:
+                    # Log results of completed tests.
+                    db.hardware_test.log_results(results,
+                                                 self.diagnostics_results_dir)
+                    _L().info('Logged results to: `%s`',
+                              self.diagnostics_results_dir.realpath())
+            raise asyncio.Return(results)
+
+        task = cancellable(_run_tests)
+        # Write capacitance updates to log in background thread.
+        future = self.executor.submit(task)
+
+        @gtk_threadsafe
+        def _show_progress_dialog():
             app = get_app()
             parent = app.main_window_controller.view
             dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_CANCEL,
@@ -1900,11 +1941,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             progress = gtk.ProgressBar()
             content_area.pack_start(progress, fill=True, expand=True, padding=5)
             content_area.show_all()
+            cancel_button = dialog.get_action_area().get_children()[0]
 
-            task = cancellable(_run_tests)
-
-            # Write capacitance updates to log in background thread.
-            future = self.executor.submit(task)
             # Close dialog once tests have completed.
             future.add_done_callback(lambda *args:
                                      gtk_threadsafe(dialog.destroy)())
@@ -1927,12 +1965,15 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # Launch dialog to show test activity and wait until test has
             # completed.
             response = dialog.run()
-            if response == gtk.RESPONSE_CANCEL:
+            if response in (gtk.RESPONSE_DELETE_EVENT, gtk.RESPONSE_CANCEL):
                 # User clicked cancel button.  Cancel remaining tests.
                 task.cancel()
-            dialog.destroy()
+                if not future.done():
+                    cancel_button.props.label = 'Cancelling...'
+                    cancel_button.props.sensitive = False
 
-        self._use_cached_capacitance_prompt()
+        _show_progress_dialog()
+        return future
 
     @gtk_threadsafe
     @require_connection(log_level='info')  # Log if DropBot is not connected.
