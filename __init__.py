@@ -308,6 +308,9 @@ def require_test_board(func):
 
     .. versionchanged:: 2.25
         Add clickable hyperlink to DropBot Test Board documentation.
+
+    .. versionchanged:: X.X.X
+        Set default focus to OK button.
     '''
     @wraps(func)
     def _wrapped(*args, **kwargs):
@@ -336,6 +339,14 @@ def require_test_board(func):
         dialog.label.connect("activate-link", _on_link_clicked)
 
         dialog.props.use_markup = True
+
+        # Set default focus to OK button.
+        buttons = {b.props.label: b
+                   for b in dialog.get_action_area().get_children()}
+        ok_button = buttons['gtk-ok']
+        ok_button.props.has_focus = True
+        ok_button.props.has_default = True
+
         response = dialog.run()
         dialog.destroy()
 
