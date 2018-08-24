@@ -834,7 +834,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         dialog.run()
         dialog.destroy()
 
-    @gtk_threadsafe  # Execute in GTK main thread
     @error_ignore(lambda *args:
                   _L().error('Error executing DropBot self tests.',
                              exc_info=True))
@@ -858,106 +857,37 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: 2.28
             Display a progress dialog while the test is running.
+
+        .. versionchanged:: X.X.X
+            Use :meth:`run_tests()` to execute tests while displaying a
+            progress dialog indicating which test is currently running.
         '''
-        gtk.gdk.threads_init()
+        # XXX Wait for test results in background thread to allow UI to display
+        # and update a progress dialog.
+        future = self.executor.submit(self.run_tests().result)
 
-        dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK,
-                                   flags=gtk.DIALOG_MODAL |
-                                   gtk.DIALOG_DESTROY_WITH_PARENT)
-        dialog.props.text = ('Running DropBot diagnostic self tests.\n\nThis '
-                             'may take up to a minute to complete.  Please '
-                             'wait...')
-        dialog.set_title('DropBot self tests')
-        dialog.props.destroy_with_parent = True
-        dialog.props.window_position = gtk.WIN_POS_MOUSE
-        # Disable `X` window close button.
-        dialog.props.deletable = False
-        content_area = dialog.get_content_area()
-        progress = gtk.ProgressBar()
-        content_area.pack_start(progress, fill=True, expand=True, padding=5)
-        progress.props.can_focus = True
-        progress.props.has_focus = True
-        # Disable `OK` button until test has completed.
-        dialog.get_action_area().props.sensitive = False
-        content_area.show_all()
-
-        # Need three active threads:
-        #
-        #  1. Main GTK thread calling this function, which will block when
-        #     dialog is run/shown.
-        #  2. DropBot self-test thread, which will block until test is
-        #     complete.
-        #  3. Progress update thread to refresh dialog progress bar while test
-        #     is running and enable `OK` button once test has completed.
-
-        # Set once DropBot self tests have completed.
-        tests_completed = threading.Event()
-
-        results = {}
-
-        def _run_test():
-            results_ = db.self_test.self_test(self.control_board)
-            results.update(results_)
-            tests_completed.set()
-
-        def _update_progress():
-            start = time.time()
-            while not tests_completed.wait(1. / 5):
-                # Update progress bar.
-                gtk_threadsafe(progress.pulse)()
-                gtk_threadsafe(progress.set_text)('Duration: %.0f s' %
-                                                  (time.time() - start))
-
-            # Test has completed.
-            @gtk_threadsafe
-            def _finish_dialog():
-                progress.props.fraction = 1
-                dialog.get_action_area().props.sensitive = True
-                dialog.get_action_area().get_children()[0].props.has_focus = True
-                progress.props.text = ('Completed after %.0f s. Click OK to '
-                                       'open results in browser.' %
-                                       (time.time() - start))
-            _finish_dialog()
-
-        for func_i in (_update_progress, _run_test):
-            thread_i = threading.Thread(target=func_i)
-            thread_i.daemon = True
-            thread_i.start()
-
-        # Launch dialog to show test activity and wait until test has
-        # completed.
-        dialog.run()
-        dialog.destroy()
-
-        # Test has completed, now:
-        #
-        #  1. Write raw JSON results to `.dropbot-diagnostics` directory in
-        #     current working directory.
-        #  2. Write HTML report to `.dropbot-diagnostics` directory in current
-        #     working directory (with raw JSON results embedded in a
-        #     `<script id="results" .../> tag).
-        #  3. Launch HTML report in web browser.
-        results_dir = ph.path(self.diagnostics_results_dir)
-        results_dir.makedirs_p()
-
-        # Create unique output filenames based on current timestamp.
-        timestamp = dt.datetime.now().isoformat().replace(':', '_')
-        json_path = results_dir.joinpath('results-%s.json' % timestamp)
-        report_path = results_dir.joinpath('results-%s.html' % timestamp)
-
-        # Write test results encoded as JSON.
-        with json_path.open('w') as output:
-            # XXX Use `json_tricks` rather than standard `json` to support
-            # serializing [Numpy arrays and scalars][1].
+        def _on_tests_completed(future):
+            results = future.result()
+            # Tests have completed, now:
             #
-            # [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
-            output.write(json_tricks.dumps(results, indent=4))
+            #  1. Write HTML report to `.dropbot-diagnostics` directory in current
+            #     working directory (with raw JSON results embedded in a
+            #     `<script id="results" .../> tag).
+            #  2. Launch HTML report in web browser.
+            results_dir = ph.path(self.diagnostics_results_dir)
+            results_dir.makedirs_p()
 
-        # Generate test result summary report as HTML document.
-        db.self_test.generate_report(results, output_path=report_path,
-                                     force=True)
-        # Launch HTML report.
-        report_path.launch()
+            # Create unique output filenames based on current timestamp.
+            timestamp = dt.datetime.utcnow().isoformat().replace(':', '_')
+            report_path = results_dir.joinpath('results-%s.html' % timestamp)
+
+            # Generate test result summary report as HTML document.
+            db.self_test.generate_report(results, output_path=report_path,
+                                         force=True)
+            # Launch HTML report.
+            report_path.launch()
+
+        future.add_done_callback(_on_tests_completed)
 
     def create_ui(self):
         '''
@@ -1945,7 +1875,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
             # Close dialog once tests have completed.
             future.add_done_callback(lambda *args:
-                                     gtk_threadsafe(dialog.destroy)())
+                                    gtk_threadsafe(dialog.destroy)())
 
             @gtk_threadsafe
             def _on_test_started(message):
