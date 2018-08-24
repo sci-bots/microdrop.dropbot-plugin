@@ -16,11 +16,11 @@ GNU General Public License for more details.
 You should have received a copy of the GNU General Public License
 along with dropbot_plugin.  If not, see <http://www.gnu.org/licenses/>.
 """
+from __future__ import division
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 import datetime as dt
 import gzip
-import json
 import logging
 import pkg_resources
 import re
@@ -30,6 +30,7 @@ import types
 import warnings
 import webbrowser
 
+from asyncio_helpers import cancellable
 from dropbot import EVENT_ENABLE, EVENT_CHANNELS_UPDATED, EVENT_SHORTS_DETECTED
 from flatland import Integer, Float, Form, Boolean
 from flatland.validation import ValueAtLeast, ValueAtMost
@@ -48,9 +49,10 @@ from microdrop.plugin_manager import (Plugin, implements, PluginGlobals,
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
-from pygtkhelpers.utils import gsignal
+from pygtkhelpers.utils import gsignal, refresh_gui
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 import base_node_rpc as bnr
+import blinker
 import dropbot as db
 import dropbot.hardware_test
 import dropbot.self_test
@@ -306,6 +308,9 @@ def require_test_board(func):
 
     .. versionchanged:: 2.25
         Add clickable hyperlink to DropBot Test Board documentation.
+
+    .. versionchanged:: 2.35
+        Set default focus to OK button.
     '''
     @wraps(func)
     def _wrapped(*args, **kwargs):
@@ -334,6 +339,14 @@ def require_test_board(func):
         dialog.label.connect("activate-link", _on_link_clicked)
 
         dialog.props.use_markup = True
+
+        # Set default focus to OK button.
+        buttons = {b.props.label: b
+                   for b in dialog.get_action_area().get_children()}
+        ok_button = buttons['gtk-ok']
+        ok_button.props.has_focus = True
+        ok_button.props.has_default = True
+
         response = dialog.run()
         dialog.destroy()
 
@@ -445,7 +458,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.menu_items = []
         self.menu = None
         self.menu_item_root = None
-        self.diagnostics_results_dir = '.dropbot-diagnostics'
+        self.diagnostics_results_dir = ph.path('.dropbot-diagnostics')
         self.actuated_area = 0
 
         #: .. versionadded:: 2.24
@@ -555,7 +568,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 area = self.actuated_area * (1e-3 ** 2)
                 # Approximate area in SI units.
                 value, pow10 = si.split(np.sqrt(area))
-                si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 + pow10 / 3]
+                si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 +
+                                             pow10 // 3]
                 status = ('actuated electrodes: %s (%.1f %sm^2)' %
                           (self.actuated_channels, value ** 2, si_unit))
                 self.push_status(status, None, True)
@@ -831,7 +845,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         dialog.run()
         dialog.destroy()
 
-    @gtk_threadsafe  # Execute in GTK main thread
     @error_ignore(lambda *args:
                   _L().error('Error executing DropBot self tests.',
                              exc_info=True))
@@ -855,106 +868,37 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: 2.28
             Display a progress dialog while the test is running.
+
+        .. versionchanged:: 2.35
+            Use :meth:`run_tests()` to execute tests while displaying a
+            progress dialog indicating which test is currently running.
         '''
-        gtk.gdk.threads_init()
+        # XXX Wait for test results in background thread to allow UI to display
+        # and update a progress dialog.
+        future = self.executor.submit(self.run_tests().result)
 
-        dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_OK,
-                                   flags=gtk.DIALOG_MODAL |
-                                   gtk.DIALOG_DESTROY_WITH_PARENT)
-        dialog.props.text = ('Running DropBot diagnostic self tests.\n\nThis '
-                             'may take up to a minute to complete.  Please '
-                             'wait...')
-        dialog.set_title('DropBot self tests')
-        dialog.props.destroy_with_parent = True
-        dialog.props.window_position = gtk.WIN_POS_MOUSE
-        # Disable `X` window close button.
-        dialog.props.deletable = False
-        content_area = dialog.get_content_area()
-        progress = gtk.ProgressBar()
-        content_area.pack_start(progress, fill=True, expand=True, padding=5)
-        progress.props.can_focus = True
-        progress.props.has_focus = True
-        # Disable `OK` button until test has completed.
-        dialog.get_action_area().props.sensitive = False
-        content_area.show_all()
-
-        # Need three active threads:
-        #
-        #  1. Main GTK thread calling this function, which will block when
-        #     dialog is run/shown.
-        #  2. DropBot self-test thread, which will block until test is
-        #     complete.
-        #  3. Progress update thread to refresh dialog progress bar while test
-        #     is running and enable `OK` button once test has completed.
-
-        # Set once DropBot self tests have completed.
-        tests_completed = threading.Event()
-
-        results = {}
-
-        def _run_test():
-            results_ = db.self_test.self_test(self.control_board)
-            results.update(results_)
-            tests_completed.set()
-
-        def _update_progress():
-            start = time.time()
-            while not tests_completed.wait(1. / 5):
-                # Update progress bar.
-                gtk_threadsafe(progress.pulse)()
-                gtk_threadsafe(progress.set_text)('Duration: %.0f s' %
-                                                  (time.time() - start))
-
-            # Test has completed.
-            @gtk_threadsafe
-            def _finish_dialog():
-                progress.props.fraction = 1
-                dialog.get_action_area().props.sensitive = True
-                dialog.get_action_area().get_children()[0].props.has_focus = True
-                progress.props.text = ('Completed after %.0f s. Click OK to '
-                                       'open results in browser.' %
-                                       (time.time() - start))
-            _finish_dialog()
-
-        for func_i in (_update_progress, _run_test):
-            thread_i = threading.Thread(target=func_i)
-            thread_i.daemon = True
-            thread_i.start()
-
-        # Launch dialog to show test activity and wait until test has
-        # completed.
-        dialog.run()
-        dialog.destroy()
-
-        # Test has completed, now:
-        #
-        #  1. Write raw JSON results to `.dropbot-diagnostics` directory in
-        #     current working directory.
-        #  2. Write HTML report to `.dropbot-diagnostics` directory in current
-        #     working directory (with raw JSON results embedded in a
-        #     `<script id="results" .../> tag).
-        #  3. Launch HTML report in web browser.
-        results_dir = ph.path(self.diagnostics_results_dir)
-        results_dir.makedirs_p()
-
-        # Create unique output filenames based on current timestamp.
-        timestamp = dt.datetime.now().isoformat().replace(':', '_')
-        json_path = results_dir.joinpath('results-%s.json' % timestamp)
-        report_path = results_dir.joinpath('results-%s.html' % timestamp)
-
-        # Write test results encoded as JSON.
-        with json_path.open('w') as output:
-            # XXX Use `json_tricks` rather than standard `json` to support
-            # serializing [Numpy arrays and scalars][1].
+        def _on_tests_completed(future):
+            results = future.result()
+            # Tests have completed, now:
             #
-            # [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
-            output.write(json_tricks.dumps(results, indent=4))
+            #  1. Write HTML report to `.dropbot-diagnostics` directory in current
+            #     working directory (with raw JSON results embedded in a
+            #     `<script id="results" .../> tag).
+            #  2. Launch HTML report in web browser.
+            results_dir = ph.path(self.diagnostics_results_dir)
+            results_dir.makedirs_p()
 
-        # Generate test result summary report as HTML document.
-        db.self_test.generate_report(results, output_path=report_path,
-                                     force=True)
-        # Launch HTML report.
-        report_path.launch()
+            # Create unique output filenames based on current timestamp.
+            timestamp = dt.datetime.utcnow().isoformat().replace(':', '_')
+            report_path = results_dir.joinpath('results-%s.html' % timestamp)
+
+            # Generate test result summary report as HTML document.
+            db.self_test.generate_report(results, output_path=report_path,
+                                         force=True)
+            # Launch HTML report.
+            report_path.launch()
+
+        future.add_done_callback(_on_tests_completed)
 
     def create_ui(self):
         '''
@@ -1741,8 +1685,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             meters_squared_area = actuated_area * (1e-3 ** 2)  # m^2 area
             # Approximate length of unit side in SI units.
             si_length, pow10 = si.split(np.sqrt(meters_squared_area))
-            si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 + pow10 /
-                                         3]
+            si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 +
+                                         pow10 // 3]
 
             target_capacitance = (options['volume_threshold'] * actuated_area *
                                   app_values['c_liquid'])
@@ -1798,6 +1742,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # _disabled_).
         raise asyncio.Return(actuated_electrodes)
 
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def on_experiment_log_changed(self, log):
         '''
         Add control board metadata to the experiment log.
@@ -1805,6 +1750,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 0.16.1
             Only attempt to run diagnostic tests if DropBot hardware is
             connected.
+
+        .. versionchanged:: 2.35
+            - Only run entire method if DropBot hardware is connected.
+            - Display progress in a dialog while running diagnostic tests and
+              allow user to cancel (logging test results for any completed
+              tests).
         '''
         # Check if the experiment log already has control board meta data, and
         # if so, return.
@@ -1816,25 +1767,17 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # add the name, hardware version, id, and firmware version to the
         # experiment log metadata
         data = {}
-        if self.control_board:
-            data["control board name"] = \
-                self.control_board.properties['display_name']
-            data["control board id"] = \
-                self.control_board.id
-            data["control board uuid"] = \
-                self.control_board.uuid
-            data["control board hardware version"] = (self.control_board
-                                                      .hardware_version)
-            data["control board software version"] = (self.control_board
-                                                      .properties
-                                                      ['software_version'])
-            # add info about the devices on the i2c bus
-            """
-            try:
-                #data["i2c devices"] = (self.control_board._i2c_devices)
-            except:
-                pass
-            """
+        data["control board name"] = \
+            self.control_board.properties['display_name']
+        data["control board id"] = \
+            self.control_board.id
+        data["control board uuid"] = \
+            self.control_board.uuid
+        data["control board hardware version"] = (self.control_board
+                                                  .hardware_version)
+        data["control board software version"] = (self.control_board
+                                                  .properties
+                                                  ['software_version'])
         log.add_data(data)
 
         # add metadata to experiment log
@@ -1842,36 +1785,150 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         # run diagnostic tests
         app_values = self.get_app_values()
-        if self.dropbot_connected.is_set() and app_values.get('Auto-run '
-                                                              'diagnostic '
-                                                              'tests'):
+        if app_values.get('Auto-run diagnostic tests'):
             _L().info('Running diagnostic tests')
             tests = ['system_info',
                      'test_i2c',
                      'test_voltage',
                      'test_shorts',
                      'test_on_board_feedback_calibration']
-            results = {}
-
-            for test in tests:
-                test_func = getattr(db.hardware_test, test)
-                results[test] = test_func(self.control_board)
-            db.hardware_test.log_results(results, self.diagnostics_results_dir)
-        else:
-            _L().info('DropBot not connected - not running diagnostic tests')
-
+            future = self.run_tests(tests)
+            # XXX Execute pending GTK events to update progress dialog until
+            # tests are completed.
+            while not future.done():
+                while gtk.events_pending():
+                    gtk.main_iteration_do(block=False)
+                time.sleep(.01)
         self._use_cached_capacitance_prompt()
 
+    @require_connection()  # Display error dialog if DropBot is not connected.
+    def run_tests(self, tests=None):
+        '''
+        .. versionadded:: 2.35
+
+        Execute DropBot self-tests while display progress in a dialog.
+
+        Allow user to cancel (logging test results for any completed tests).
+
+        Parameters
+        ----------
+        tests : list, optional
+            List of DropBot self-tests to run (e.g., ``'system_info'``,
+            ``'test_i2c'``, etc.).  By default, run _all_ tests.
+
+        Returns
+        -------
+        concurrent.futures.Future
+            Asynchronous results of tests.  The `result()` method may be used
+            to block until tests are complete, **_but_** **MUST** not be called
+            from the GTK main thread, since doing so would prevent the progress
+            dialog from displaying/updating.
+        '''
+        if tests is None:
+            tests = db.self_test.ALL_TESTS
+
+        signals = blinker.Namespace()
+
+        @asyncio.coroutine
+        def _run_tests():
+            results = {}
+
+            try:
+                for i, test in enumerate(tests):
+                    test_func = getattr(db.hardware_test, test)
+                    signals.signal('test-started')\
+                        .send({'test': test, 'completed': i,
+                                'total': len(tests)})
+                    results[test] = test_func(self.control_board)
+                    signals.signal('test-completed')\
+                        .send({'test': test, 'completed': i + 1,
+                                'total': len(tests), 'results': results})
+                    # Yield control to asyncio event loop.  This provides
+                    # breakpoints where the coroutine may be cancelled.
+                    yield asyncio.From(asyncio.sleep(0))
+            except asyncio.CancelledError:
+                # Gracefully exit if task is cancelled, returning results of
+                # completed tests.
+                pass
+            finally:
+                if results:
+                    # Log results of completed tests.
+                    db.hardware_test.log_results(results,
+                                                 self.diagnostics_results_dir)
+                    _L().info('Logged results to: `%s`',
+                              self.diagnostics_results_dir.realpath())
+            raise asyncio.Return(results)
+
+        task = cancellable(_run_tests)
+        # Write capacitance updates to log in background thread.
+        future = self.executor.submit(task)
+
+        @gtk_threadsafe
+        def _show_progress_dialog():
+            app = get_app()
+            parent = app.main_window_controller.view
+            dialog = gtk.MessageDialog(buttons=gtk.BUTTONS_CANCEL,
+                                       flags=gtk.DIALOG_MODAL |
+                                       gtk.DIALOG_DESTROY_WITH_PARENT,
+                                       parent=parent)
+            dialog.set_icon(parent.get_icon())
+            dialog.set_title('DropBot self tests')
+            dialog.props.text = 'Running DropBot diagnostic self tests.'
+            dialog.props.destroy_with_parent = True
+            dialog.props.window_position = gtk.WIN_POS_MOUSE
+            # Disable `X` window close button.
+            dialog.props.deletable = False
+            content_area = dialog.get_content_area()
+            progress = gtk.ProgressBar()
+            content_area.pack_start(progress, fill=True, expand=True, padding=5)
+            content_area.show_all()
+            cancel_button = dialog.get_action_area().get_children()[0]
+
+            # Close dialog once tests have completed.
+            future.add_done_callback(lambda *args:
+                                    gtk_threadsafe(dialog.destroy)())
+
+            @gtk_threadsafe
+            def _on_test_started(message):
+                # Update progress bar.
+                progress.set_fraction(message['completed'] / message['total'])
+                progress.set_text('Running: `%s`' % message['test'])
+
+            @gtk_threadsafe
+            def _on_test_completed(message):
+                # Update progress bar.
+                progress.set_fraction(message['completed'] / message['total'])
+                progress.set_text('Finished: `%s`' % message['test'])
+
+            signals.signal('test-started').connect(_on_test_started)
+            signals.signal('test-completed').connect(_on_test_completed)
+
+            # Launch dialog to show test activity and wait until test has
+            # completed.
+            response = dialog.run()
+            if response in (gtk.RESPONSE_DELETE_EVENT, gtk.RESPONSE_CANCEL):
+                # User clicked cancel button.  Cancel remaining tests.
+                task.cancel()
+                if not future.done():
+                    cancel_button.props.label = 'Cancelling...'
+                    cancel_button.props.sensitive = False
+
+        _show_progress_dialog()
+        return future
+
     @gtk_threadsafe
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def _use_cached_capacitance_prompt(self):
         '''
         .. versionadded:: 0.18
+
+        .. versionchanged:: 2.35
+            Only run if DropBot is connected.
         '''
         # XXX TODO add event to indicate if `c_liquid` has been confirmed; either by prompting to use cached value or by measuring new value.
         # XXX TODO add event to indicate if `c_filler` has been confirmed; either by prompting to use cached value or by measuring new value.
         app_values = self.get_app_values()
-        if (self.dropbot_connected.is_set() and (app_values['c_liquid'] > 0 or
-                                                 app_values['c_filler'] > 0)):
+        if app_values['c_liquid'] > 0 or app_values['c_filler'] > 0:
             response = yesno('Use cached value for c<sub>liquid</sub> '
                              'and c<sub>filler</sub>?')
             # reset the cached capacitance values
