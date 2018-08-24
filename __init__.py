@@ -309,7 +309,7 @@ def require_test_board(func):
     .. versionchanged:: 2.25
         Add clickable hyperlink to DropBot Test Board documentation.
 
-    .. versionchanged:: X.X.X
+    .. versionchanged:: 2.35
         Set default focus to OK button.
     '''
     @wraps(func)
@@ -869,7 +869,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.28
             Display a progress dialog while the test is running.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.35
             Use :meth:`run_tests()` to execute tests while displaying a
             progress dialog indicating which test is currently running.
         '''
@@ -1751,7 +1751,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Only attempt to run diagnostic tests if DropBot hardware is
             connected.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.35
             - Only run entire method if DropBot hardware is connected.
             - Display progress in a dialog while running diagnostic tests and
               allow user to cancel (logging test results for any completed
@@ -1804,7 +1804,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @require_connection()  # Display error dialog if DropBot is not connected.
     def run_tests(self, tests=None):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.35
 
         Execute DropBot self-tests while display progress in a dialog.
 
@@ -1922,7 +1922,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         .. versionadded:: 0.18
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.35
             Only run if DropBot is connected.
         '''
         # XXX TODO add event to indicate if `c_liquid` has been confirmed; either by prompting to use cached value or by measuring new value.
