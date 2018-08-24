@@ -1863,15 +1863,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self._use_cached_capacitance_prompt()
 
     @gtk_threadsafe
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def _use_cached_capacitance_prompt(self):
         '''
         .. versionadded:: 0.18
+
+        .. versionchanged:: X.X.X
+            Only run if DropBot is connected.
         '''
         # XXX TODO add event to indicate if `c_liquid` has been confirmed; either by prompting to use cached value or by measuring new value.
         # XXX TODO add event to indicate if `c_filler` has been confirmed; either by prompting to use cached value or by measuring new value.
         app_values = self.get_app_values()
-        if (self.dropbot_connected.is_set() and (app_values['c_liquid'] > 0 or
-                                                 app_values['c_filler'] > 0)):
+        if app_values['c_liquid'] > 0 or app_values['c_filler'] > 0:
             response = yesno('Use cached value for c<sub>liquid</sub> '
                              'and c<sub>filler</sub>?')
             # reset the cached capacitance values
