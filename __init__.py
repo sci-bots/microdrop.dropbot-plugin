@@ -1003,7 +1003,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.34.1
             Do not enable ``"Auto-run diagnostic tests"`` by default.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.36
             Deprecate actuation default settings since the respective step
             options were deprecated as part of refactoring to implement
             `IElectrodeActuator` interface.
@@ -1048,7 +1048,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             DropBot.  This allows, for example, menu items requiring a DropBot
             to default to non-sensitive.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.36
             Register ``identify_electrode()`` electrode command with command
             plugin.
         '''
@@ -1554,7 +1554,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def on_protocol_run(self):
         '''
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.36
             Do not warn about DropBot not connected.  As of MicroDrop 2.28.2,
             a warning is displayed by the electrode controller plugin in such
             cases with an option to ignore the issue and continue.
@@ -1984,7 +1984,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def find_liquid(self):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.36
 
         Turn on electrodes where capacitance level suggests liquid is present.
         '''
@@ -2013,7 +2013,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def identify_electrode(self, electrode_id):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.36
 
         Pulse each neighbour electrode to help visually identify an electrode.
         '''
