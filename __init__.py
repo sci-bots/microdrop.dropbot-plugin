@@ -994,12 +994,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: 2.34.1
             Do not enable ``"Auto-run diagnostic tests"`` by default.
+
+        .. versionchanged:: X.X.X
+            Deprecate actuation default settings since the respective step
+            options were deprecated as part of refactoring to implement
+            `IElectrodeActuator` interface.
         '''
         return Form.of(
-            Float.named('default_duration').using(default=1000, optional=True),
-            Float.named('default_voltage').using(default=80, optional=True),
-            Float.named('default_frequency').using(default=10e3,
-                                                   optional=True),
             Boolean.named('Auto-run diagnostic tests').using(default=False,
                                                              optional=True),
             #: .. versionadded:: 0.18
