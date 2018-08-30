@@ -130,6 +130,9 @@ class DmfZmqPlugin(ZmqPlugin):
     def on_execute__measure_filler_capacitance(self, request):
         self.parent.on_measure_filler_capacitance()
 
+    def on_execute__find_liquid(self, request):
+        return self.parent.find_liquid()
+
 
 def max_voltage(element, state):
     """Verify that the voltage is below a set maximum"""
@@ -1066,6 +1069,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                         command_name='measure_%s_capacitance' % medium,
                         namespace='global', plugin_name=self.name,
                         title='Measure _%s capacitance' % medium)
+        hub_execute('microdrop.command_plugin', 'register_command',
+                    command_name='find_liquid', namespace='global',
+                    plugin_name=self.name, title='Fin_d liquid')
 
     def on_plugin_disable(self):
         self.cleanup_plugin()
@@ -1963,5 +1969,33 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                               'microdrop.command_plugin')]
         return []
 
+    def find_liquid(self):
+        '''
+        .. versionadded:: X.X.X
+
+        Turn on electrodes where capacitance level suggests liquid is present.
+        '''
+        app = get_app()
+        channels = app.dmf_device.channel_areas[app.dmf_device.channel_areas >
+                                                0].index.drop_duplicates()
+        capacitances = pd.Series(self.control_board
+                                 .channel_capacitances(channels),
+                                 index=channels)
+        capacitances = capacitances[capacitances > 0]
+        if capacitances.shape[0] < 1:
+            return
+        liquid_channels = capacitances[capacitances > 10 * capacitances.min()]
+        map(_L().info, str(capacitances.describe()).splitlines())
+        if liquid_channels.shape[0] > .5 * channels.shape[0]:
+            # More than half of the channels identified as containing liquid...
+            # Assume threshold is incorrect.
+            return
+        liquid_channels.sort_index(inplace=True)
+        liquid_electrodes = \
+            app.dmf_device.electrodes_by_channel.loc[liquid_channels.index]
+        hub_execute('microdrop.electrode_controller_plugin',
+                    'set_electrode_states',
+                    electrode_states=pd.Series(1, index=liquid_electrodes))
+        return liquid_electrodes.values
 
 PluginGlobals.pop_env()
