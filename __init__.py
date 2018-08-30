@@ -49,8 +49,9 @@ from microdrop.plugin_manager import (Plugin, implements, PluginGlobals,
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
-from pygtkhelpers.utils import gsignal, refresh_gui
+from pygtkhelpers.utils import gsignal
 from zmq_plugin.plugin import Plugin as ZmqPlugin
+from zmq_plugin.schema import decode_content_data
 import base_node_rpc as bnr
 import blinker
 import dropbot as db
@@ -132,6 +133,10 @@ class DmfZmqPlugin(ZmqPlugin):
 
     def on_execute__find_liquid(self, request):
         return self.parent.find_liquid()
+
+    def on_execute__identify_electrode(self, request):
+        data = decode_content_data(request)
+        self.parent.identify_electrode(data['electrode_id'])
 
 
 def max_voltage(element, state):
@@ -1042,6 +1047,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Initialize connection status before attempting to connect to
             DropBot.  This allows, for example, menu items requiring a DropBot
             to default to non-sensitive.
+
+        .. versionchanged:: X.X.X
+            Register ``identify_electrode()`` electrode command with command
+            plugin.
         '''
         super(DropBotPlugin, self).on_plugin_enable()
         if not self.menu_items:
@@ -1072,6 +1081,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         hub_execute('microdrop.command_plugin', 'register_command',
                     command_name='find_liquid', namespace='global',
                     plugin_name=self.name, title='Fin_d liquid')
+        hub_execute('microdrop.command_plugin', 'register_command',
+                    command_name='identify_electrode', namespace='electrode',
+                    plugin_name=self.name, title='_Visually identify '
+                    'electrode')
 
     def on_plugin_disable(self):
         self.cleanup_plugin()
@@ -1997,5 +2010,21 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     'set_electrode_states',
                     electrode_states=pd.Series(1, index=liquid_electrodes))
         return liquid_electrodes.values
+
+    def identify_electrode(self, electrode_id):
+        '''
+        .. versionadded:: X.X.X
+
+        Pulse each neighbour electrode to help visually identify an electrode.
+        '''
+        app = get_app()
+        neighbours = app.dmf_device.electrode_neighbours.loc[electrode_id].dropna()
+        neighbour_channels = \
+            app.dmf_device.channels_by_electrode.loc[neighbours]
+
+        for channel in neighbour_channels:
+            for state in (1, 0):
+                self.control_board.state_of_channels = \
+                    pd.Series(state, index=[channel])
 
 PluginGlobals.pop_env()
