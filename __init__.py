@@ -49,8 +49,9 @@ from microdrop.plugin_manager import (Plugin, implements, PluginGlobals,
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
-from pygtkhelpers.utils import gsignal, refresh_gui
+from pygtkhelpers.utils import gsignal
 from zmq_plugin.plugin import Plugin as ZmqPlugin
+from zmq_plugin.schema import decode_content_data
 import base_node_rpc as bnr
 import blinker
 import dropbot as db
@@ -129,6 +130,13 @@ class DmfZmqPlugin(ZmqPlugin):
 
     def on_execute__measure_filler_capacitance(self, request):
         self.parent.on_measure_filler_capacitance()
+
+    def on_execute__find_liquid(self, request):
+        return self.parent.find_liquid()
+
+    def on_execute__identify_electrode(self, request):
+        data = decode_content_data(request)
+        self.parent.identify_electrode(data['electrode_id'])
 
 
 def max_voltage(element, state):
@@ -994,12 +1002,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: 2.34.1
             Do not enable ``"Auto-run diagnostic tests"`` by default.
+
+        .. versionchanged:: 2.36
+            Deprecate actuation default settings since the respective step
+            options were deprecated as part of refactoring to implement
+            `IElectrodeActuator` interface.
         '''
         return Form.of(
-            Float.named('default_duration').using(default=1000, optional=True),
-            Float.named('default_voltage').using(default=80, optional=True),
-            Float.named('default_frequency').using(default=10e3,
-                                                   optional=True),
             Boolean.named('Auto-run diagnostic tests').using(default=False,
                                                              optional=True),
             #: .. versionadded:: 0.18
@@ -1038,6 +1047,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Initialize connection status before attempting to connect to
             DropBot.  This allows, for example, menu items requiring a DropBot
             to default to non-sensitive.
+
+        .. versionchanged:: 2.36
+            Register ``identify_electrode()`` electrode command with command
+            plugin.
         '''
         super(DropBotPlugin, self).on_plugin_enable()
         if not self.menu_items:
@@ -1065,6 +1078,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                         command_name='measure_%s_capacitance' % medium,
                         namespace='global', plugin_name=self.name,
                         title='Measure _%s capacitance' % medium)
+        hub_execute('microdrop.command_plugin', 'register_command',
+                    command_name='find_liquid', namespace='global',
+                    plugin_name=self.name, title='Fin_d liquid')
+        hub_execute('microdrop.command_plugin', 'register_command',
+                    command_name='identify_electrode', namespace='electrode',
+                    plugin_name=self.name, title='_Visually identify '
+                    'electrode')
 
     def on_plugin_disable(self):
         self.cleanup_plugin()
@@ -1533,16 +1553,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     csv_output_path)
 
     def on_protocol_run(self):
-        """
-        Handler called when a protocol starts running.
-        """
+        '''
+        .. versionchanged:: 2.36
+            Do not warn about DropBot not connected.  As of MicroDrop 2.28.2,
+            a warning is displayed by the electrode controller plugin in such
+            cases with an option to ignore the issue and continue.
+        '''
         # XXX TODO 2.33 refactor to implement `IApplicationMode` interface
         # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
         app = get_app()
-        if not self.dropbot_connected.is_set():
-            _L().warning("Warning: no control board connected.")
-        elif (self.control_board.number_of_channels <=
-              app.dmf_device.max_channel()):
+        if self.dropbot_connected.is_set() and (self.control_board
+                                                .number_of_channels <=
+                                                app.dmf_device.max_channel()):
             _L().warning("Warning: currently connected board does not have "
                          "enough channels for this protocol.")
 
@@ -1960,5 +1982,49 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                               'microdrop.command_plugin')]
         return []
 
+    def find_liquid(self):
+        '''
+        .. versionadded:: 2.36
+
+        Turn on electrodes where capacitance level suggests liquid is present.
+        '''
+        app = get_app()
+        channels = app.dmf_device.channel_areas[app.dmf_device.channel_areas >
+                                                0].index.drop_duplicates()
+        capacitances = pd.Series(self.control_board
+                                 .channel_capacitances(channels),
+                                 index=channels)
+        capacitances = capacitances[capacitances > 0]
+        if capacitances.shape[0] < 1:
+            return
+        liquid_channels = capacitances[capacitances > 10 * capacitances.min()]
+        map(_L().info, str(capacitances.describe()).splitlines())
+        if liquid_channels.shape[0] > .5 * channels.shape[0]:
+            # More than half of the channels identified as containing liquid...
+            # Assume threshold is incorrect.
+            return
+        liquid_channels.sort_index(inplace=True)
+        liquid_electrodes = \
+            app.dmf_device.electrodes_by_channel.loc[liquid_channels.index]
+        hub_execute('microdrop.electrode_controller_plugin',
+                    'set_electrode_states',
+                    electrode_states=pd.Series(1, index=liquid_electrodes))
+        return liquid_electrodes.values
+
+    def identify_electrode(self, electrode_id):
+        '''
+        .. versionadded:: 2.36
+
+        Pulse each neighbour electrode to help visually identify an electrode.
+        '''
+        app = get_app()
+        neighbours = app.dmf_device.electrode_neighbours.loc[electrode_id].dropna()
+        neighbour_channels = \
+            app.dmf_device.channels_by_electrode.loc[neighbours]
+
+        for channel in neighbour_channels:
+            for state in (1, 0):
+                self.control_board.state_of_channels = \
+                    pd.Series(state, index=[channel])
 
 PluginGlobals.pop_env()
