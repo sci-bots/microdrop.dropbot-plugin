@@ -1534,16 +1534,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     csv_output_path)
 
     def on_protocol_run(self):
-        """
-        Handler called when a protocol starts running.
-        """
+        '''
+        .. versionchanged:: X.X.X
+            Do not warn about DropBot not connected.  As of MicroDrop 2.28.2,
+            a warning is displayed by the electrode controller plugin in such
+            cases with an option to ignore the issue and continue.
+        '''
         # XXX TODO 2.33 refactor to implement `IApplicationMode` interface
         # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
         app = get_app()
-        if not self.dropbot_connected.is_set():
-            _L().warning("Warning: no control board connected.")
-        elif (self.control_board.number_of_channels <=
-              app.dmf_device.max_channel()):
+        if self.dropbot_connected.is_set() and (self.control_board
+                                                .number_of_channels <=
+                                                app.dmf_device.max_channel()):
             _L().warning("Warning: currently connected board does not have "
                          "enough channels for this protocol.")
 
