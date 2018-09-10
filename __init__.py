@@ -926,9 +926,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: 2.34.1
             Add ``_DropBot help...`` entry to main window ``Help`` menu.
+
+        .. versionchanged:: X.X.X
+            Replace original MicroDrop help menu item.
         '''
         # Add DropBot help entry to main window `Help` menu.
-        menu_item = gtk.MenuItem('_DropBot help...')
+        menu_item = gtk.ImageMenuItem(stock_id=gtk.STOCK_HELP)
+        menu_item.set_label('_DropBot help...')
         help_url = 'https://sci-bots.com/dropbot'
         menu_item.connect('activate', lambda menu_item:
                           webbrowser.open_new_tab(help_url))
@@ -937,6 +941,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         main_help_menu.insert(menu_item, len(main_help_menu.get_children()) -
                               1)
         menu_item.show()
+
+        # Remove original MicroDrop help menu item (if it exists).
+        for c in main_help_menu.get_children()[:]:
+            if c.props.label == 'Online _help...':
+                main_help_menu.remove(c)
 
         # Create head for DropBot on-board tests sub-menu.
         tests_menu_head = gtk.MenuItem('On-board self-_tests')
@@ -1344,8 +1353,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # Enable/disable control board menu items based on the connection
             # status of the control board.
             for menu_item_i in self.menu_items:
-                if 'Help' not in menu_item_i.props.label:
-                    menu_item_i.set_sensitive(self.dropbot_connected.is_set())
+                menu_item_i.set_sensitive(self.dropbot_connected.is_set())
 
             app.main_window_controller.label_control_board_status\
                 .set_text(self.connection_status)
