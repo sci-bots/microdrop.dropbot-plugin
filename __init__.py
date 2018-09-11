@@ -1593,6 +1593,33 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
         self.turn_off()
 
+    @asyncio.coroutine
+    def on_step_run(self, plugin_kwargs, signals):
+        '''
+        .. versionadded:: X.X.X
+
+        Handler called whenever a step is executed.
+
+        Parameters
+        ----------
+        plugin_kwargs : dict
+            Plugin settings as JSON serializable dictionary.
+        signals : blinker.Namespace
+            Signals namespace.
+        '''
+        @asyncio.coroutine
+        def _set_frequency(frequency):
+            raise asyncio.Return(self.set_frequency(frequency))
+
+        @asyncio.coroutine
+        def _set_voltage(voltage):
+            raise asyncio.Return(self.set_voltage(voltage))
+
+        signals.signal('set-frequency').connect(_set_frequency, weak=False)
+        signals.signal('set-voltage').connect(_set_voltage, weak=False)
+        signals.signal('on-actuation-request').connect(self
+                                                       .on_actuation_request)
+
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_voltage(self, voltage):
         """
@@ -1873,7 +1900,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     test_func = getattr(db.hardware_test, test)
                     signals.signal('test-started')\
                         .send({'test': test, 'completed': i,
-                                'total': len(tests)})
+                               'total': len(tests)})
                     results[test] = test_func(self.control_board)
                     signals.signal('test-completed')\
                         .send({'test': test, 'completed': i + 1,
