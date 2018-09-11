@@ -1133,11 +1133,20 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 app_values = self.get_app_values()
                 self.control_board.update_state(capacitance_update_interval_ms=
                                                 app_values['c_update_ms'])
-                if not app.realtime_mode and not app.running:
-                    _L().info('Turning off all electrodes.')
-                    self.control_board.hv_output_enabled = False
-                    self.update_connection_status()
-                    self.clear_status()
+                self.turn_off()
+
+    def turn_off(self):
+        '''
+        .. versionadded:: X.X.X
+
+        Turn off high voltage output and clear status label and status bar.
+        '''
+        app = get_app()
+        if not app.realtime_mode and not app.running:
+            _L().info('Turning off all electrodes.')
+            self.control_board.hv_output_enabled = False
+            self.update_connection_status()
+            self.clear_status()
 
     def connect_dropbot(self):
         """
@@ -1582,11 +1591,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         # XXX TODO 2.33 refactor to implement `IApplicationMode` interface
         # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
-        app = get_app()
-        if self.dropbot_connected.is_set() and not app.realtime_mode:
-            # Turn off all electrodes
-            _L().debug('Turning off all electrodes.')
-            self.control_board.hv_output_enabled = False
+        self.turn_off()
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_voltage(self, voltage):
