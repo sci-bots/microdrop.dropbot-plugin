@@ -38,9 +38,10 @@ from matplotlib.backends.backend_gtkagg import (FigureCanvasGTKAgg as
                                                 FigureCanvas)
 from matplotlib.figure import Figure
 from logging_helpers import _L  #: .. versionadded:: 2.24
-from microdrop.app_context import get_app, get_hub_uri
-from microdrop.interfaces import (IElectrodeActuator, IPlugin,
-                                  IWaveformGenerator)
+from microdrop.app_context import (get_app, get_hub_uri, MODE_RUNNING_MASK,
+                                   MODE_REAL_TIME_MASK)
+from microdrop.interfaces import (IApplicationMode, IElectrodeActuator,
+                                  IPlugin, IWaveformGenerator)
 from microdrop.plugin_helpers import (StepOptionsController, AppDataController,
                                       hub_execute)
 from microdrop.plugin_manager import (Plugin, implements, PluginGlobals,
@@ -388,6 +389,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     gsignal('chip-removed')
 
     implements(IPlugin)
+    implements(IApplicationMode)
     implements(IElectrodeActuator)
     implements(IWaveformGenerator)
 
@@ -1133,20 +1135,21 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 app_values = self.get_app_values()
                 self.control_board.update_state(capacitance_update_interval_ms=
                                                 app_values['c_update_ms'])
-                self.turn_off()
+                if not app.realtime_mode and not app.running:
+                    self.turn_off()
 
+    @require_connection(log_level='info')  # Log if DropBot is not connected.
     def turn_off(self):
         '''
         .. versionadded:: X.X.X
 
         Turn off high voltage output and clear status label and status bar.
         '''
-        app = get_app()
-        if not app.realtime_mode and not app.running:
-            _L().info('Turning off all electrodes.')
-            self.control_board.hv_output_enabled = False
-            self.update_connection_status()
-            self.clear_status()
+        _L().info('Turning off all electrodes.')
+        self.control_board.turn_off_all_channels()
+        self.control_board.hv_output_enabled = False
+        self.update_connection_status()
+        self.push_status('Turned off all electrodes.')
 
     def connect_dropbot(self):
         """
@@ -1568,30 +1571,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 df.to_csv(output, index=False, header=include_header)
         logger.info('logged %s capacitance updates to `%s`', df.shape[0],
                     csv_output_path)
-
-    def on_protocol_run(self):
-        '''
-        .. versionchanged:: 2.36
-            Do not warn about DropBot not connected.  As of MicroDrop 2.28.2,
-            a warning is displayed by the electrode controller plugin in such
-            cases with an option to ignore the issue and continue.
-        '''
-        # XXX TODO 2.33 refactor to implement `IApplicationMode` interface
-        # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
-        app = get_app()
-        if self.dropbot_connected.is_set() and (self.control_board
-                                                .number_of_channels <=
-                                                app.dmf_device.max_channel()):
-            _L().warning("Warning: currently connected board does not have "
-                         "enough channels for this protocol.")
-
-    def on_protocol_pause(self):
-        """
-        Handler called when a protocol is paused.
-        """
-        # XXX TODO 2.33 refactor to implement `IApplicationMode` interface
-        # XXX TODO implement `IApplicationMode` interface (see https://trello.com/c/zxwRlytP)
-        self.turn_off()
 
     @asyncio.coroutine
     def on_step_run(self, plugin_kwargs, signals):
@@ -2066,5 +2045,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             for state in (1, 0):
                 self.control_board.state_of_channels = \
                     pd.Series(state, index=[channel])
+
+    def on_mode_changed(self, old_mode, new_mode):
+        '''
+        .. versionadded:: X.X.X
+        '''
+        if (all([(old_mode & MODE_REAL_TIME_MASK),
+                 (new_mode & ~MODE_REAL_TIME_MASK),
+                 (new_mode & ~MODE_RUNNING_MASK)]) or
+            all([(old_mode & MODE_RUNNING_MASK),
+                 (new_mode & ~MODE_RUNNING_MASK)])):
+            # Either real-time mode was disabled when it was enabled or
+            # protocol just stopped running.
+            self.turn_off()
 
 PluginGlobals.pop_env()
