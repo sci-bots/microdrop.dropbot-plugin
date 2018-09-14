@@ -461,7 +461,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.control_board = None
         self.name = self.plugin_name
         self.connection_status = "Not connected"
-        self.current_frequency = None
         self.channel_states = pd.Series()
         self.plugin = None
         self.plugin_timeout_id = None
@@ -1184,7 +1183,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.control_board.terminate()
             self.control_board = None
             gobject.idle_add(self.emit, 'dropbot-disconnected')
-        self.current_frequency = None
 
         def _attempt_connect(**kwargs):
             '''
@@ -1613,25 +1611,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         _L().debug("%.1f", voltage)
 
-        with self.control_board.transaction_lock:
-            original_state = self.control_board.state
-
-            # Construct required state
-            state = original_state.copy()
-            state.hv_output_enabled = True
-            state.hv_output_selected = True
-
-            if not (state == original_state).all():
-                # Update modified state properties.
-                self.control_board.state = state[state != original_state]
-
-            self.control_board.voltage = voltage
-
-        # Cache measured actuation voltage. Delay before measuring the
-        # actuation voltage to give it time to settle.
-        gobject.timeout_add(100, lambda *args:
-                            setattr(self, 'actuation_voltage',
-                                    self.control_board.measure_voltage()))
+        self.control_board.voltage = voltage
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_frequency(self, frequency):
