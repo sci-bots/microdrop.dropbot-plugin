@@ -77,6 +77,7 @@ import zmq
 
 from ._version import get_versions
 from .noconflict import classmaker
+from .execute import actuate, execute
 __version__ = get_versions()['version']
 del get_versions
 
@@ -1584,18 +1585,16 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         signals : blinker.Namespace
             Signals namespace.
         '''
-        @asyncio.coroutine
-        def _set_frequency(frequency):
-            raise asyncio.Return(self.set_frequency(frequency))
+        app = get_app()
+        dmf_device = app.dmf_device
+        proxy = self.control_board
+        app_values = self.get_app_values()
+        if app_values['c_liquid'] > 0:
+            plugin_kwargs[self.name]['c_unit_area'] = app_values['c_liquid']
 
-        @asyncio.coroutine
-        def _set_voltage(voltage):
-            raise asyncio.Return(self.set_voltage(voltage))
-
-        signals.signal('set-frequency').connect(_set_frequency, weak=False)
-        signals.signal('set-voltage').connect(_set_voltage, weak=False)
-        signals.signal('on-actuation-request').connect(self
-                                                       .on_actuation_request)
+        result = yield asyncio.From(execute(proxy, dmf_device, plugin_kwargs,
+                                            signals))
+        raise asyncio.Return(result)
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def set_voltage(self, voltage):
@@ -1623,145 +1622,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         """
         _L().debug("%.1f", frequency)
         self.control_board.frequency = frequency
-        self.current_frequency = frequency
-
-    @asyncio.coroutine
-    def on_actuation_request(self, electrode_states, duration_s=0):
-        '''
-        XXX Coroutine XXX
-
-        Actuate electrodes according to specified states.
-
-        Parameters
-        ----------
-        electrode_states : pandas.Series
-        duration_s : float, optional
-            If ``volume_threshold`` step option is set, maximum duration before
-            timing out.  Otherwise, time to actuate before actuation is
-            considered completed.
-
-        Returns
-        -------
-        actuated_electrodes : list
-            List of actuated electrode IDs.
-
-
-        .. versionadded:: 2.33
-        '''
-        if not self.dropbot_connected.is_set():
-            raise RuntimeError('DropBot not connected.')
-
-        app = get_app()
-        options = self.get_step_options()
-        app_values = self.get_app_values()
-        requested_electrodes = electrode_states[electrode_states > 0].index
-        requested_channels = (app.dmf_device.channels_by_electrode
-                              .loc[requested_electrodes])
-
-        # Criteria that must be met to set target capacitance.
-        threshold_criteria = [app.running, duration_s > 0,
-                              options['volume_threshold'] > 0,
-                              len(requested_electrodes) > 0,
-                              app_values['c_liquid'] > 0]
-
-        if not all(threshold_criteria):
-            # ## Case 1: no volume threshold specified.
-            #  1. Set control board state of channels according to requested
-            #     actuation states.
-            #  2. Wait for channels to be actuated.
-            actuated_channels = \
-                db.threshold.actuate_channels(self.control_board,
-                                              requested_channels, timeout=5)
-
-            #  3. Connect to `capacitance-updated` signal to record capacitance
-            #     values measured during the step.
-            capacitance_messages = []
-
-            def _on_capacitance_updated(message):
-                message['actuated_channels'] = self.actuated_channels
-                message['actuated_area'] = self.actuated_area
-                capacitance_messages.append(message)
-
-            (self.control_board.signals.signal('capacitance-updated')
-             .connect(_on_capacitance_updated))
-            #  4. Delay for specified duration.
-            try:
-                yield asyncio.From(asyncio.sleep(duration_s))
-            finally:
-                (self.control_board.signals.signal('capacitance-updated')
-                 .disconnect(_on_capacitance_updated))
-        else:
-            # ## Case 2: volume threshold specified.
-            #
-            # A volume threshold has been set for this step.
-
-            # Calculate target capacitance based on actuated area.
-            #
-            # Note: `app_values['c_liquid']` represents a *specific
-            # capacitance*, i.e., has units of $F/mm^2$.
-            actuated_areas = (app.dmf_device.electrode_areas
-                              .ix[requested_electrodes.values])
-            actuated_area = actuated_areas.sum()
-
-            meters_squared_area = actuated_area * (1e-3 ** 2)  # m^2 area
-            # Approximate length of unit side in SI units.
-            si_length, pow10 = si.split(np.sqrt(meters_squared_area))
-            si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 +
-                                         pow10 // 3]
-
-            target_capacitance = (options['volume_threshold'] * actuated_area *
-                                  app_values['c_liquid'])
-
-            logger = _L()  # use logger with function context
-            if logger.getEffectiveLevel() <= logging.DEBUG:
-                message = ('target capacitance: %sF (actuated area: (%.1f '
-                           '%sm^2) actuated channels: %s)' %
-                           (si.si_format(target_capacitance), si_length ** 2,
-                            si_unit, requested_channels))
-                map(logger.debug, message.splitlines())
-            # Wait for target capacitance to be reached in background thread,
-            # timing out if the specified duration is exceeded.
-            co_future = \
-                db.threshold.co_target_capacitance(self.control_board,
-                                                   requested_channels,
-                                                   target_capacitance,
-                                                   allow_disabled=False,
-                                                   timeout=duration_s)
-            try:
-                dropbot_event = yield asyncio.From(asyncio
-                                                   .wait_for(co_future,
-                                                             duration_s))
-                _L().debug('target capacitance reached: `%s`', dropbot_event)
-                actuated_channels = dropbot_event['actuated_channels']
-
-                capacitance_messages = dropbot_event['capacitance_updates']
-                # Add actuated area to capacitance update messages.
-                for capacitance_i in capacitance_messages:
-                    capacitance_i['acuated_area'] = actuated_area
-
-                # Show notification in main window status bar.
-                status = ('reached %sF (> %sF) over electrodes: %s (%.1f '
-                          '%sm^2) after %ss' %
-                          (si.si_format(dropbot_event['new_value']),
-                           si.si_format(dropbot_event['target']),
-                           actuated_channels, si_length ** 2, si_unit,
-                           (dropbot_event['end'] -
-                            dropbot_event['start']).total_seconds()))
-                gtk_threadsafe(self.push_status)(status, 5, False)
-            except asyncio.TimeoutError:
-                raise RuntimeError('Timed out waiting for target capacitance.')
-
-        actuated_electrodes = (app.dmf_device.electrodes_by_channel
-                               .loc[actuated_channels])
-
-        # Write capacitance updates to log in background thread.
-        self.executor.submit(self.log_capacitance_updates,
-                             capacitance_messages)
-
-        # Return list of actuated channels (which _may_ be fewer than the
-        # number of requested actuated channels if one or more channels is
-        # _disabled_).
-        raise asyncio.Return(actuated_electrodes)
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def on_experiment_log_changed(self, log):
