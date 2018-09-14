@@ -1588,6 +1588,21 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         app = get_app()
         dmf_device = app.dmf_device
         proxy = self.control_board
+
+        if proxy is None and plugin_kwargs[self.name]['volume_threshold'] > 0:
+            # Volume threshold is specified, but no DropBot is connected.
+            # The expected behaviour _with_ DropBot connected is that specified
+            # duration is _maximum_ time to wait for volume threshold to be
+            # reached.
+            # Rather than wait the full specified duration for each actuation,
+            # set the duration to 0.2 seconds during this step to mimic typical
+            # maximum actuation speed, e.g., when volume threshold is set with
+            # the test board inserted.
+            key = 'Duration (s)'
+            plugin_kwargs['microdrop.electrode_controller_plugin'][key] = 0.2
+            _L().info('DropBot is not connected.  Set duration to 0.2 seconds '
+                      '(temporarily) to mimic DropBot threshold actuation.')
+
         app_values = self.get_app_values()
         if app_values['c_liquid'] > 0:
             plugin_kwargs[self.name]['c_unit_area'] = app_values['c_liquid']
