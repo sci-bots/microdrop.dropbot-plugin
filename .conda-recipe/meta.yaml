@@ -28,7 +28,7 @@ requirements:
     #: .. versionchanged:: 2.29
     #: .. versionchanged:: 2.32.2
     #: .. versionchanged:: 2.33
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.37
     - dropbot >=1.66
     - flatland-fork
     - json-tricks >=3.8.0
@@ -39,7 +39,7 @@ requirements:
     #:     Require `IElectrodeActuator` interface.
     #: .. versionchanged:: 2.36
     #:     Require ignorable electrode controller warning on failed actuation.
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.37
     #:     Require updated `IPlugin` interface where `on_step_run()` is a
     #:     coroutine, accepting plugin step parameters and signals namespace as
     #:     arguments.
@@ -75,7 +75,7 @@ requirements:
     #: .. versionchanged:: 2.29
     #: .. versionchanged:: 2.32.2
     #: .. versionchanged:: 2.33
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.37
     - dropbot >=1.66
     - flatland-fork
     - json-tricks >=3.8.0
@@ -86,7 +86,7 @@ requirements:
     #:     Require `IElectrodeActuator` interface.
     #: .. versionchanged:: 2.36
     #:     Require ignorable electrode controller warning on failed actuation.
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.37
     #:     Require updated `IPlugin` interface where `on_step_run()` is a
     #:     coroutine, accepting plugin step parameters and signals namespace as
     #:     arguments.

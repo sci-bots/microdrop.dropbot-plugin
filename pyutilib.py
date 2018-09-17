@@ -929,7 +929,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.34.1
             Add ``_DropBot help...`` entry to main window ``Help`` menu.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.37
             Replace original MicroDrop help menu item.
         '''
         # Add DropBot help entry to main window `Help` menu.
@@ -1141,7 +1141,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def turn_off(self):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.37
 
         Turn off high voltage output and clear status label and status bar.
         '''
@@ -1574,7 +1574,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @asyncio.coroutine
     def on_step_run(self, plugin_kwargs, signals):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.37
 
         Handler called whenever a step is executed.
 
@@ -1903,7 +1903,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def on_mode_changed(self, old_mode, new_mode):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.37
         '''
         if (all([(old_mode & MODE_REAL_TIME_MASK),
                  (new_mode & ~MODE_REAL_TIME_MASK),
