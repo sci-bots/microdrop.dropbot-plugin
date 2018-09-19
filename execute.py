@@ -193,7 +193,9 @@ def actuate(proxy, dmf_device, electrode_states, duration_s=0,
     # number of requested actuated channels if one or more channels is
     # _disabled_).
     result.update({'actuated_electrodes': actuated_electrodes,
-                   'capacitance_messages': capacitance_messages})
+                   'capacitance_messages': capacitance_messages,
+                   'actuated_channels': actuated_channels,
+                   'actuated_area': actuated_area})
 
     raise asyncio.Return(result)
 

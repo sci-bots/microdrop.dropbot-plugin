@@ -1584,6 +1584,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Plugin settings as JSON serializable dictionary.
         signals : blinker.Namespace
             Signals namespace.
+
+
+        .. versionchanged:: 2.37.1
+            Restore logging of capacitance update messages collected during
+            actuation and notification of volume threshold reached through
+            statusbar.
         '''
         app = get_app()
         dmf_device = app.dmf_device
@@ -1606,6 +1612,37 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         app_values = self.get_app_values()
         if app_values['c_liquid'] > 0:
             plugin_kwargs[self.name]['c_unit_area'] = app_values['c_liquid']
+
+        @asyncio.coroutine
+        def actuation_watcher(sender, **kwargs):
+            if kwargs.get('capacitance_messages'):
+                # Log capacitance update messages collected during actuation.
+                # Notify volume threshold was reached through statusbar.
+                capacitance_messages = kwargs['capacitance_messages']
+                # Write capacitance updates to log in background thread.
+                self.executor.submit(self.log_capacitance_updates,
+                                     capacitance_messages)
+            if 'threshold' in kwargs:
+                # Notify volume threshold was reached through statusbar.
+
+                # Compute area in units of m^2.
+                meters_squared_area = kwargs['actuated_area'] * (1e-3 ** 2)
+                # Approximate length of unit side in SI units.
+                si_length, pow10 = si.split(np.sqrt(meters_squared_area))
+                si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 +
+                                             pow10 // 3]
+                status = ('reached %sF (> %sF) over electrodes: %s (%.1f '
+                          '%sm^2) after %ss' %
+                          (si.si_format(kwargs['threshold']['measured']),
+                           si.si_format(kwargs['threshold']['target']),
+                           kwargs['actuated_channels'], si_length ** 2,
+                           si_unit, (kwargs['threshold']['end'] -
+                                     kwargs['threshold']['start'])
+                           .total_seconds()))
+                self.push_status(status)
+
+        signals.signal('actuation-completed').connect(actuation_watcher,
+                                                      weak=False)
 
         result = yield asyncio.From(execute(proxy, dmf_device, plugin_kwargs,
                                             signals))
