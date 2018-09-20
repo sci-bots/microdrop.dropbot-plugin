@@ -29,7 +29,9 @@ requirements:
     #: .. versionchanged:: 2.32.2
     #: .. versionchanged:: 2.33
     #: .. versionchanged:: 2.37
-    - dropbot >=1.66
+    #: .. versionchanged:: 2.37.2
+    #:     Verify that DropBot device is found before closing Teensy Loader.
+    - dropbot >=1.66.2
     - flatland-fork
     - json-tricks >=3.8.0
     #: .. versionadded:: 2.27
@@ -76,7 +78,9 @@ requirements:
     #: .. versionchanged:: 2.32.2
     #: .. versionchanged:: 2.33
     #: .. versionchanged:: 2.37
-    - dropbot >=1.66
+    #: .. versionchanged:: 2.37.2
+    #:     Verify that DropBot device is found before closing Teensy Loader.
+    - dropbot >=1.66.2
     - flatland-fork
     - json-tricks >=3.8.0
     #: .. versionadded:: 2.27
