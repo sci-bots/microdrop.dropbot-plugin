@@ -31,7 +31,9 @@ requirements:
     #: .. versionchanged:: 2.37
     #: .. versionchanged:: 2.37.2
     #:     Verify that DropBot device is found before closing Teensy Loader.
-    - dropbot >=1.66.2
+    #: .. versionchanged:: X.X.X
+    #:     Add async DropBot monitor coroutine.
+    - dropbot >=1.67.1
     - flatland-fork
     - json-tricks >=3.8.0
     #: .. versionadded:: 2.27
@@ -80,7 +82,9 @@ requirements:
     #: .. versionchanged:: 2.37
     #: .. versionchanged:: 2.37.2
     #:     Verify that DropBot device is found before closing Teensy Loader.
-    - dropbot >=1.66.2
+    #: .. versionchanged:: X.X.X
+    #:     Add async DropBot monitor coroutine.
+    - dropbot >=1.67.1
     - flatland-fork
     - json-tricks >=3.8.0
     #: .. versionadded:: 2.27

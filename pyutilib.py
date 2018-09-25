@@ -12,7 +12,7 @@ import types
 import warnings
 import webbrowser
 
-from asyncio_helpers import cancellable
+from asyncio_helpers import cancellable, sync
 from dropbot import EVENT_ENABLE, EVENT_CHANNELS_UPDATED, EVENT_SHORTS_DETECTED
 from flatland import Integer, Float, Form, Boolean
 from flatland.validation import ValueAtLeast, ValueAtMost
@@ -39,6 +39,7 @@ import base_node_rpc as bnr
 import blinker
 import dropbot as db
 import dropbot.hardware_test
+import dropbot.monitor
 import dropbot.self_test
 import dropbot.threshold
 import gobject
@@ -48,6 +49,7 @@ import gtk
 #
 # [1]: http://json-tricks.readthedocs.io/en/latest/#numpy-arrays
 import json_tricks
+import markdown2pango
 import numpy as np
 import pandas as pd
 import path_helpers as ph
@@ -458,6 +460,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         #: .. versionadded:: 2.24
         self.actuation_voltage = 0
+        self.monitor_task = None
 
         #: .. versionadded:: 2.24
         self._step_capacitances = []
@@ -485,171 +488,143 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self._dropbot_connected = threading.Event()
         self.dropbot_connected.count = 0
 
-        self.connect('chip-inserted', lambda *args:
-                     self.chip_inserted.set())
-        self.connect('chip-inserted', lambda *args:
-                     self.update_connection_status())
-        self.connect('chip-removed', lambda *args:
-                     self.chip_inserted.clear())
-        self.connect('chip-removed', lambda *args:
-                     self.update_connection_status())
-        self.connect('chip-removed', lambda *args: self.clear_status())
+        self.dropbot_signals = blinker.Namespace()
 
-        def _connect_dropbot_signals(*args):
+        @asyncio.coroutine
+        def on_inserted(sender, **message):
+            self.chip_inserted.set()
+            self.update_connection_status()
+
+        self.dropbot_signals.signal('chip-inserted').connect(on_inserted,
+                                                             weak=False)
+
+        @asyncio.coroutine
+        def on_removed(sender, **message):
+            self.chip_inserted.clear()
+            self.update_connection_status()
+            self.clear_status()
+
+        self.dropbot_signals.signal('chip-removed').connect(on_removed,
+                                                            weak=False)
+
+        # XXX TODO Debounce capacitance updates with `debounce.async.Debounce()`
+        capacitance_update_status = {'time': time.time()}
+
+        # Update cached device load capacitance each time the
+        # `'capacitance-updated'` signal is emitted from the DropBot.
+        @asyncio.coroutine
+        def _on_capacitance_updated(sender, **message):
+            now = time.time()
+            if now - capacitance_update_status['time'] > .2:
+                self.on_device_capacitance_update(message['new_value'],
+                                                  message['V_a'])
+                capacitance_update_status['time'] = now
+
+        self.dropbot_signals.signal('capacitance-updated')\
+            .connect(_on_capacitance_updated, weak=False)
+
+        @asyncio.coroutine
+        def _on_channels_updated(sender, **message):
             '''
-            .. versionadded:: 2.29
-
-            .. versionchanged:: 2.29
-                Tie connection status to serial connection signals.
-
-            .. versionchanged:: 2.31
-                Display an error message when the DropBot reports that shorts
-                have been detected on one or more channels.
-
-            .. versionchanged:: 2.32
-                Display an error message when "halted" event is received from
-                the DropBot.
+            Message keys:
+             - ``"n"``: number of actuated channel
+             - ``"actuated"``: list of actuated channel identifiers.
+             - ``"start"``: ms counter before setting shift registers
+             - ``"end"``: ms counter after setting shift registers
             '''
-            # Connect to DropBot signals to monitor chip insertion status.
-            self.control_board.signals.signal('output_enabled')\
-                .connect(lambda message:
-                         gtk_threadsafe(self.emit)('chip-inserted'),
-                         weak=False)
-            self.control_board.signals.signal('output_disabled')\
-                .connect(lambda message:
-                         gtk_threadsafe(self.emit)('chip-removed'),
-                         weak=False)
-            capacitance_update_status = {'time': time.time()}
+            actuated_channels = message['actuated']
+            if actuated_channels:
+                app = get_app()
+                actuated_electrodes = \
+                    (app.dmf_device.actuated_electrodes(actuated_channels)
+                     .dropna())
+                actuated_areas = (app.dmf_device
+                                  .electrode_areas.ix[actuated_electrodes
+                                                      .values])
+                self.actuated_area = actuated_areas.sum()
+            else:
+                self.actuated_area = 0
+            # m^2 area
+            area = self.actuated_area * (1e-3 ** 2)
+            # Approximate area in SI units.
+            value, pow10 = si.split(np.sqrt(area))
+            si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 +
+                                         pow10 // 3]
+            status = ('actuated electrodes: %s (%.1f %sm^2)' %
+                      (actuated_channels, value ** 2, si_unit))
+            self.push_status(status, None, True)
+            _L().debug(status)
+            self._state_applied.set()
 
-            # Update cached device load capacitance each time the
-            # `'capacitance-updated'` signal is emitted from the DropBot.
-            def _on_capacitance_updated(message):
-                if 'V_a' in message:
-                    self.actuation_voltage = message['V_a']
-                self.device_load_capacitance = message['new_value']
-                now = time.time()
-                if now - capacitance_update_status['time'] > .2:
-                    self.on_device_capacitance_update(message['new_value'])
-                    capacitance_update_status['time'] = now
-            (self.control_board.signals.signal('capacitance-updated')
-             .connect(_on_capacitance_updated, weak=False))
-            _L().info('connected capacitance updated signal callback')
+        self.dropbot_signals.signal('channels-updated')\
+            .connect(_on_channels_updated, weak=False)
 
-            def _on_channels_updated(message):
-                '''
-                Message keys:
-                 - ``"n"``: number of actuated channel
-                 - ``"actuated"``: list of actuated channel identifiers.
-                 - ``"start"``: ms counter before setting shift registers
-                 - ``"end"``: ms counter after setting shift registers
-                '''
-                self.actuated_channels = message['actuated']
-                if self.actuated_channels:
-                    app = get_app()
-                    actuated_electrodes = \
-                        (app.dmf_device.actuated_electrodes(self
-                                                            .actuated_channels)
-                         .dropna())
-                    actuated_areas = (app.dmf_device
-                                      .electrode_areas.ix[actuated_electrodes
-                                                          .values])
-                    self.actuated_area = actuated_areas.sum()
-                else:
-                    self.actuated_area = 0
-                # m^2 area
-                area = self.actuated_area * (1e-3 ** 2)
-                # Approximate area in SI units.
-                value, pow10 = si.split(np.sqrt(area))
-                si_unit = si.SI_PREFIX_UNITS[len(si.SI_PREFIX_UNITS) // 2 +
-                                             pow10 // 3]
-                status = ('actuated electrodes: %s (%.1f %sm^2)' %
-                          (self.actuated_channels, value ** 2, si_unit))
-                self.push_status(status, None, True)
-                _L().debug(status)
-                self._state_applied.set()
+        @gtk_threadsafe
+        def refresh_channels():
+            # XXX Reassign channel states to trigger a `channels-updated`
+            # message since actuated channel states may have changed based
+            # on the channels that were disabled.
+            self.control_board.turn_off_all_channels()
+            self.control_board.state_of_channels = self.channel_states
 
-            (self.control_board.signals.signal('channels-updated')
-             .connect(_on_channels_updated, weak=False))
-            _L().info('connected channels updated signal callback')
+        @asyncio.coroutine
+        def _on_shorts_detected(sender, **message):
+            '''
+            Example message:
 
-            @gtk_threadsafe
-            def refresh_channels():
-                # XXX Reassign channel states to trigger a `channels-updated`
-                # message since actuated channel states may have changed based
-                # on the channels that were disabled.
-                self.control_board.turn_off_all_channels()
-                self.control_board.state_of_channels = self.channel_states
+            ```python
+            OrderedDict([(u'event', u'shorts-detected'), (u'values', [])])
+            ```
+            '''
+            if message.get('values'):
+                status = ('Shorts detected.  Disabled the following '
+                          'channels: %s' % message['values'])
+                gtk_threadsafe(_L().error)\
+                ('Shorts were detected on the following '
+                 'channels:\n\n    %s\n\n'
+                 'You may continue using the DropBot, but the '
+                 'affected channels have been disabled until the'
+                 ' DropBot is restarted (e.g., unplug all cables'
+                 ' and plug back in).', message['values'])
+            else:
+                status = 'No shorts detected.'
+            # XXX Refresh channels since some channels may have been
+            # disabled.
+            refresh_channels()
+            self.push_status(status)
 
-            @gtk_threadsafe
-            def _on_shorts_detected(message):
-                '''
-                Example message:
+        self.dropbot_signals.signal('shorts-detected')\
+            .connect(_on_shorts_detected, weak=False)
 
-                ```python
-                OrderedDict([(u'event', u'shorts-detected'), (u'values', [])])
-                ```
-                '''
-                if message.get('values'):
-                    status = ('Shorts detected.  Disabled the following '
-                              'channels: %s' % message['values'])
-                    _L().error('Shorts were detected on the following '
-                               'channels:\n\n    %s\n\n'
-                               'You may continue using the DropBot, but the '
-                               'affected channels have been disabled until the'
-                               ' DropBot is restarted (e.g., unplug all cables'
-                               ' and plug back in).', message['values'])
-                else:
-                    status = 'No shorts detected.'
-                # XXX Refresh channels since some channels may have been
-                # disabled.
-                refresh_channels()
-                self.push_status(status)
+        @asyncio.coroutine
+        def _on_halted(sender, **message):
+            # DropBot has halted.  All channels have been disabled and high
+            # voltage has been turned off.
 
-            (self.control_board.signals.signal('shorts-detected')
-             .connect(_on_shorts_detected, weak=False))
+            reason =  ''
 
-            @gtk_threadsafe
-            def on_serial_connected(message):
-                self.emit('dropbot-connected', self.control_board)
+            if 'error' in message:
+                error = message['error']
+                if error.get('name') == 'output-current-exceeded':
+                    reason = ' because output current was exceeded'
+                elif error.get('name') == 'chip-load-saturated':
+                    reason = ' because chip load feedback exceeded allowable range'
 
-            @gtk_threadsafe
-            def on_serial_disconnected(message):
-                self.emit('dropbot-disconnected')
+            status = 'DropBot has halted%s.' % reason
+            message = '''
+                All channels have been disabled and high voltage has been
+                turned off until the DropBot is restarted (e.g., unplug all
+                cables and plug back in).'''.strip()
+            # XXX Refresh channels since channels were disabled.
+            refresh_channels()
+            self.push_status(status)
+            gtk_threadsafe(_L().error)\
+                ('\n'.join([status, map(str.strip, message.splitlines())]))
 
-            (self.control_board.serial_signals.signal('connected')
-             .connect(on_serial_connected, weak=False))
-            (self.control_board.serial_signals.signal('disconnected')
-             .connect(on_serial_disconnected, weak=False))
+        self.dropbot_signals.signal('halted').connect(_on_halted, weak=False)
 
-            @gtk_threadsafe
-            def _on_halted(message):
-                # DropBot has halted.  All channels have been disabled and high
-                # voltage has been turned off.
-
-                reason =  ''
-
-                if 'error' in message:
-                    error = message['error']
-                    if error.get('name') == 'output-current-exceeded':
-                        reason = ' because output current was exceeded'
-                    elif error.get('name') == 'chip-load-saturated':
-                        reason = ' because chip load feedback exceeded allowable range'
-
-                status = 'DropBot has halted%s.' % reason
-                message = '''
-                    All channels have been disabled and high voltage has been
-                    turned off until the DropBot is restarted (e.g., unplug all
-                    cables and plug back in).'''.strip()
-                # XXX Refresh channels since channels were disabled.
-                refresh_channels()
-                self.push_status(status)
-                _L().error('\n'.join([status, map(str.strip,
-                                                  message.splitlines())]))
-
-            self.control_board.signals.signal('halted').connect(_on_halted,
-                                                                weak=False)
-
-        def _on_dropbot_connected(*args):
+        @asyncio.coroutine
+        def _on_dropbot_connected(sender, **message):
             '''
             .. versionchanged:: 2.24
                 Synchronize time between DropBot microseconds count and host
@@ -688,18 +663,18 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 respective bit in the event mask.  Fixes bug introduced in
                 2.31.
             '''
+            dropbot_ = message['dropbot']
+            map(_L().info, str(dropbot_.properties).splitlines())
+            self.control_board = dropbot_
             if self.dropbot_connected.count < 1:
-                # This is the initial connection.  Connect signal callbacks.
-                _connect_dropbot_signals()
-                message = ('Initial connection to DropBot established. '
-                           'Connected signal callbacks.')
-                _L().debug(message)
-                self.push_status(message)
+                status = 'Initial connection to DropBot established.'
+                _L().debug(status)
+                self.push_status(status)
             else:
                 # DropBot signal callbacks have already been connected.
-                message = ('DropBot connection re-established.')
-                _L().debug(message)
-                self.push_status(message)
+                status = ('DropBot connection re-established.')
+                _L().debug(status)
+                self.push_status(status)
             self.dropbot_connected.count += 1
 
             # Set event indicating DropBot has been connected.
@@ -713,34 +688,100 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                             event_mask=EVENT_CHANNELS_UPDATED |
                                             EVENT_SHORTS_DETECTED |
                                             EVENT_ENABLE)
-
-            OUTPUT_ENABLE_PIN = 22
-            # Chip may have been inserted before connecting, so `chip-inserted`
-            # event may have been missed.
-            # Explicitly check if chip is inserted by reading **active low**
-            # `OUTPUT_ENABLE_PIN`.
-            if self.control_board.digital_read(OUTPUT_ENABLE_PIN):
-                self.emit('chip-removed')
-            else:
-                self.emit('chip-inserted')
-                gtk_threadsafe(lambda: self.control_board.detect_shorts(5) and
-                               False)()
-
             self.device_time_sync = {'host': dt.datetime.utcnow(),
                                      'device_us':
                                      self.control_board.microseconds()}
+            self.update_connection_status()
 
-        self.connect('dropbot-connected', _on_dropbot_connected)
+        self.dropbot_signals.signal('connected').connect(_on_dropbot_connected,
+                                                         weak=False)
 
-        def _on_dropbot_disconnected(*args):
+        @asyncio.coroutine
+        def _on_dropbot_disconnected(sender, **message):
             self.push_status('DropBot connection lost.')
-            # Clear capacitance exceeded event since DropBot is not connected.
-            self.capacitance_exceeded.clear()
             # Clear event indicating DropBot has been disconnected.
             self.dropbot_connected.clear()
-            self.emit('chip-removed')
+            self.control_board = None
+            self.update_connection_status()
 
-        self.connect('dropbot-disconnected', _on_dropbot_disconnected)
+        self.dropbot_signals.signal('disconnected')\
+            .connect(_on_dropbot_disconnected, weak=False)
+
+        @asyncio.coroutine
+        def on_version_mismatch(*args, **kwargs):
+            message = ('**DropBot driver** version `%(driver_version)s` does '
+                       'not match **firmware** version `%(firmware_version)s`.'
+                       % kwargs)
+
+            @sync(gtk_threadsafe)
+            def version_mismatch_dialog():
+                parent = get_app().main_window_controller.view
+                dialog = gtk.Dialog('DropBot driver version mismatch',
+                                    buttons=('_Update', gtk.RESPONSE_ACCEPT,
+                                             '_Ignore', gtk.RESPONSE_OK,
+                                             '_Skip', gtk.RESPONSE_NO),
+                                    flags=gtk.DIALOG_MODAL |
+                                    gtk.DIALOG_DESTROY_WITH_PARENT,
+                                    parent=parent)
+                # Disable dialog window close "X" button.
+                dialog.props.deletable = False
+
+                # Do not close window when <Escape> key is pressed.
+                #
+                # See: http://www.async.com.br/faq/pygtk/index.py?req=show&file=faq10.013.htp
+                def on_response(dialog, response):
+                    if response in (gtk.RESPONSE_DELETE_EVENT, gtk.RESPONSE_CLOSE):
+                        dialog.emit_stop_by_name('response')
+
+                dialog.connect('delete_event', lambda *args: True)
+                dialog.connect('response', on_response)
+                dialog.connect('close', lambda *args: True)
+
+                buttons = {'ignore':
+                           dialog.get_widget_for_response(gtk.RESPONSE_OK),
+                           'update':
+                           dialog.get_widget_for_response(gtk.RESPONSE_ACCEPT),
+                           'skip':
+                           dialog.get_widget_for_response(gtk.RESPONSE_NO)}
+                buttons['ignore']\
+                    .set_tooltip_text('Ignore driver version mismatch and '
+                                      'connect anyway.')
+                buttons['update']\
+                    .set_tooltip_text('Upload DropBot firmware to match driver'
+                                      ' version.')
+                buttons['skip'].set_tooltip_text('Do not connect to DropBot.  '
+                                                 'Unplug DropBot to avoid this'
+                                                 ' dialog.')
+
+                content_area = dialog.get_content_area()
+                label = gtk.Label(markdown2pango.markdown2pango(message))
+                label.props.use_markup = True
+                label.props.wrap = True
+                label.props.xpad = 20
+                label.props.ypad = 20
+                label.props.height_request = 200
+                label.props.height_request = 100
+                # Align text to top left of dialog.
+                label.set_alignment(0, 0)
+                content_area.pack_start(label, expand=True, fill=True)
+                content_area.show_all()
+                try:
+                    response = dialog.run()
+                    response_button = dialog.get_widget_for_response(response)
+                    response_str = [b[0] for b in buttons.items()
+                                    if b[1] == response_button][0]
+                    return response_str
+                finally:
+                    dialog.destroy()
+
+            response = yield asyncio.From(version_mismatch_dialog())
+
+            if response == 'skip':
+                raise IOError(message)
+            raise asyncio.Return(response)
+
+        self.dropbot_signals.signal('version-mismatch')\
+            .connect(on_version_mismatch, weak=False)
 
     @gtk_threadsafe
     def clear_status(self):
@@ -1019,16 +1060,15 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         .. versionchanged:: 2.25
             Kill any currently running step.
+
+        .. versionchanged:: X.X.X
+            Stop background DropBot connection monitor task.
         '''
         if self.plugin_timeout_id is not None:
             gobject.source_remove(self.plugin_timeout_id)
         if self.plugin is not None:
             self.plugin = None
-        if self.dropbot_connected.is_set():
-            self.control_board.hv_output_enabled = False
-            self.control_board.terminate()
-            self.control_board = None
-            gobject.idle_add(self.emit, 'dropbot-disconnected')
+        self.stop_monitor()
 
     def on_plugin_enable(self):
         '''
@@ -1063,8 +1103,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # Periodically process outstanding message received on plugin sockets.
         self.plugin_timeout_id = gtk.timeout_add(10, self.plugin.check_sockets)
 
-        self.connect_dropbot()
-
         # Register electrode commands.
         for medium in ('liquid', 'filler'):
             hub_execute('microdrop.command_plugin', 'register_command',
@@ -1078,6 +1116,47 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     command_name='identify_electrode', namespace='electrode',
                     plugin_name=self.name, title='_Visually identify '
                     'electrode')
+
+        self.start_monitor()
+
+    def start_monitor(self):
+        '''
+        .. versionadded:: X.X.X
+
+        Start DropBot connection monitor task.
+        '''
+        if self.monitor_task is not None:
+            self.monitor_task.cancel()
+            self.control_board = None
+            self.dropbot_connected.clear()
+
+        @asyncio.coroutine
+        def dropbot_monitor(*args):
+            try:
+                yield asyncio.From(db.monitor.monitor(*args))
+            except asyncio.CancelledError:
+                _L().info('Stopped DropBot monitor.')
+
+        self.monitor_task = cancellable(dropbot_monitor)
+        thread = threading.Thread(target=self.monitor_task,
+                                  args=(self.dropbot_signals, ))
+        thread.daemon = True
+        thread.start()
+
+    def stop_monitor(self):
+        '''
+        .. versionadded:: X.X.X
+
+        Stop DropBot connection monitor task.
+        '''
+        if self.dropbot_connected.is_set():
+            self.dropbot_connected.clear()
+            if self.control_board is not None:
+                self.control_board.hv_output_enabled = False
+            self.control_board = None
+            self.monitor_task.cancel()
+            self.monitor_task = None
+            gtk_threadsafe(self.update_connection_status)()
 
     def on_plugin_disable(self):
         self.cleanup_plugin()
@@ -1132,156 +1211,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.control_board.hv_output_enabled = False
         self.update_connection_status()
         self.push_status('Turned off all electrodes.')
-
-    def connect_dropbot(self):
-        """
-        Try to connect to the DropBot control board.
-
-        If multiple DropBots are available, automatically select DropBot with
-        highest version, with ties going to the lowest port name (i.e.,
-        ``COM1`` before ``COM2``).
-
-        .. versionchanged:: 0.19
-            Rename method to ``connect_dropbot`` to avoid a name collision with
-            the ``gobject.GObject.connect`` method.
-
-            Emit ``dropbot-connected`` ``gsignal`` after establishing DropBot
-            connection.
-
-            Emit ``dropbot-disconnected`` ``gsignal`` after closing DropBot
-            connection.
-        .. versionchanged:: 0.22
-            Use new :mod:`base_node_rpc` serial device connection code to
-            connect to DropBot.
-
-            If multiple DropBots are detected, automatically connect to DropBot
-            with highest version with ties going to the first serial port
-            (i.e., ``COM1`` before ``COM2``).
-
-            Offer to *flash firmware* if no DropBot is detected, or if a
-            DropBot is found with a firmware version that does not match the
-            installed driver version.
-        """
-        if self.control_board:
-            self.control_board.terminate()
-            self.control_board = None
-            gobject.idle_add(self.emit, 'dropbot-disconnected')
-
-        def _attempt_connect(**kwargs):
-            '''
-            .. versionadded:: 0.22
-
-            Attempt connection to DropBot.
-
-
-            .. versionchanged:: 2.27
-                Ignore mismatch between DropBot driver and firmware versions as
-                long as base minor versions are equal, i.e., assume API is
-                backwards compatible.
-
-            .. versionchanged:: 2.33
-                Fix connection of DropBot signals when plugin is disabled and
-                re-enabled.
-            '''
-            try:
-                self.dropbot_connected.count = 0
-                self.dropbot_connected.clear()
-                self.control_board = db.SerialProxy(**kwargs)
-                # Emit signal to notify that DropBot connection was
-                # established.
-                gobject.idle_add(self.emit, 'dropbot-connected',
-                                 self.control_board)
-            except bnr.proxy.DeviceVersionMismatch as exception:
-                # DropBot device software version does not match host software
-                # version.
-
-                # Check if base minor versions match (e.g., `1.53rc0` and
-                # `1.53rc1`; `1.53.0` and `1.53.1`).
-                try:
-                    versions = [semantic_version.Version(pkg_resources
-                                                         .parse_version(v)
-                                                         .base_version,
-                                                         partial=True)
-                                for v in (exception.device_version,
-                                          db.__version__)]
-                except Exception as e:
-                    versions = []
-                    gobject.idle_add(_L().warning, str(e))
-
-                if len(set([(v.major, v.minor) for v in versions])) == 1:
-                    # Base minor versions are *equal*.  Assume API is backwards
-                    # compatible and attempt to connect.
-                    _attempt_connect(ignore=[bnr.proxy.DeviceVersionMismatch])
-                else:
-                    _offer_to_flash('\n'.join([str(exception), '', 'Flash '
-                                               'firmware version %s?' %
-                                               exception.device_version]))
-            except bnr.proxy.DeviceNotFound as exception:
-                # Cases:
-                #
-                #  - Device `...` does not match expected name `dropbot`.
-                #  - No named devices found.
-                #  - No dropbot device found.
-                #  - No devices found with matching name.
-                #
-                # Assume a DropBot is actually connected and offer to flash the
-                # latest firmware.
-                messages = ['\n'.join(['DropBot could not be detected.' '',
-                                       'Is a DropBot plugged in?']),
-                            'Flash firmware version %s?' % db.__version__]
-                _offer_to_flash(messages)
-            except bnr.proxy.MultipleDevicesFound:
-                # Multiple DropBot devices were found.
-                # Get list of available devices.
-                df_comports = bnr.available_devices(timeout=.1)
-                # Automatically select DropBot with highest version, with ties
-                # going to the lowest port name (i.e., `COM1` before `COM2`).
-                df_comports = df_comports.loc[df_comports.device_name ==
-                                              'dropbot'].copy()
-                df_comports.reset_index(inplace=True)
-                df_comports.sort_values(['device_version', 'port'],
-                                        ascending=[False, True], inplace=True)
-                df_comports.set_index('port', inplace=True)
-                port = df_comports.index[0]
-                # Attempt to connect to automatically selected port.
-                _attempt_connect(port=port,
-                                 ignore=[bnr.proxy.MultipleDevicesFound])
-            except Exception as exception:
-                gobject.idle_add(_L().error, str(exception))
-
-        @gtk_threadsafe
-        def _offer_to_flash(message):
-            '''
-            .. versionadded:: 0.22
-
-            Launch user prompts in GTK main thread to offer to flash new
-            DropBot firmware.
-
-            Parameters
-            ----------
-            message : str or list
-                One or more messages to ask the user.
-
-                Firmware is only flashed if user answers **Yes** to all
-                questions.
-            '''
-            if isinstance(message, types.StringTypes):
-                message = [message]
-
-            for message_i in message:
-                response = yesno(message_i)
-                if response != gtk.RESPONSE_YES:
-                    # User answered no, so do not flash firmware.
-                    break
-            else:
-                # User answered yes to all questions.
-                _L().debug('Upload DropBot firmware version %s',
-                           db.__version__)
-                db.bin.upload.upload()
-                time.sleep(0.5)
-                _attempt_connect()
-
-        _attempt_connect()
 
     def data_dir(self):
         '''
