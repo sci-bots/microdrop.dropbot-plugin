@@ -1237,6 +1237,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         app = get_app()
         app_values = self.get_app_values()
         c_liquid = app_values['c_liquid']
+        if c_liquid == np.inf:
+            c_liquid = 0
 
         label = 'Voltage: {}V, Capacitance: {}F'.format(*map(si.si_format,
                                                              (voltage,
