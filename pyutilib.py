@@ -457,9 +457,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         #: .. versionadded:: 2.24
         self.device_load_capacitance = 0
-
-        #: .. versionadded:: 2.24
-        self.actuation_voltage = 0
         self.monitor_task = None
 
         #: .. versionadded:: 2.24
@@ -1293,10 +1290,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         c = self.control_board.measure_capacitance()
         v = self.control_board.measure_voltage()
         # send a signal to update the gui
-        emit_signal('on_device_capacitance_update', c)
+        emit_signal('on_device_capacitance_update', [c, v])
         return dict(capacitance=c, voltage=v)
 
-    def on_device_capacitance_update(self, capacitance):
+    def on_device_capacitance_update(self, capacitance, actuation_voltage):
         '''
         .. versionadded:: 0.18
 
@@ -1321,7 +1318,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         '''
         # Use cached actuation voltage measurement taken ~100 ms after voltage
         # was set.
-        voltage = self.actuation_voltage
+        voltage = actuation_voltage
 
         app = get_app()
         app_values = self.get_app_values()
@@ -1404,7 +1401,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     gtk_threadsafe(self.push_status)(message, 10, False)
 
                     # send a signal to update the gui
-                    emit_signal('on_device_capacitance_update', c)
+                    v = self.control_board.measure_voltage()
+                    emit_signal('on_device_capacitance_update', [c, v])
                 finally:
                     # Restore original control board state.
                     state = self.control_board.state
