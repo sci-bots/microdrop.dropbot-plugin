@@ -3,8 +3,6 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 import datetime as dt
 import gzip
-import logging
-import pkg_resources
 import re
 import threading
 import time
@@ -32,10 +30,8 @@ from microdrop.plugin_manager import (Plugin, implements, PluginGlobals,
 from microdrop_utility.gui import yesno
 from pygtkhelpers.gthreads import gtk_threadsafe
 from pygtkhelpers.ui.dialogs import animation_dialog
-from pygtkhelpers.utils import gsignal
 from zmq_plugin.plugin import Plugin as ZmqPlugin
 from zmq_plugin.schema import decode_content_data
-import base_node_rpc as bnr
 import blinker
 import dropbot as db
 import dropbot.hardware_test
@@ -53,7 +49,6 @@ import markdown2pango
 import numpy as np
 import pandas as pd
 import path_helpers as ph
-import semantic_version
 import si_prefix as si
 import tables
 import trollius as asyncio
@@ -65,12 +60,6 @@ from .execute import actuate, execute
 __version__ = get_versions()['version']
 del get_versions
 
-
-# Reduce logging from `debounce` library.
-for _ in ("debounce.%s" % i for i in ('setTimeout', 'shouldInvoke',
-                                      'timerExpired', 'trailingEdge',
-                                      'invokeFunc')):
-    logging.getLogger(_).setLevel(logging.CRITICAL)
 
 # Prevent warning about potential future changes to Numpy scalar encoding
 # behaviour.
@@ -123,38 +112,6 @@ class DmfZmqPlugin(ZmqPlugin):
     def on_execute__identify_electrode(self, request):
         data = decode_content_data(request)
         self.parent.identify_electrode(data['electrode_id'])
-
-
-def max_voltage(element, state):
-    """Verify that the voltage is below a set maximum"""
-    service = get_service_instance_by_name(ph.path(__file__).parent.name)
-
-    if service.control_board and (element.value >
-                                  service.control_board.max_waveform_voltage):
-        return element.errors.append('Voltage exceeds the maximum value (%d '
-                                     'V).' % service.control_board
-                                     .max_waveform_voltage)
-    else:
-        return True
-
-
-def check_frequency(element, state):
-    """Verify that the frequency is within the valid range"""
-    service = get_service_instance_by_name(ph.path(__file__).parent.name)
-
-    if service.control_board and (element.value <
-                                  service.control_board.min_waveform_frequency
-                                  or element.value >
-                                  service.control_board
-                                  .max_waveform_frequency):
-        return element.errors.append('Frequency is outside of the valid range '
-                                     '(%.1f - %.1f Hz).' %
-                                     (service.control_board
-                                      .min_waveform_frequency,
-                                      service.control_board
-                                      .max_waveform_frequency))
-    else:
-        return True
 
 
 def results_dialog(name, results, axis_count=1, parent=None):
@@ -368,11 +325,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     __metaclass__ = classmaker()
 
     #: ..versionadded:: 0.19
-    gsignal('dropbot-connected', object)
-    gsignal('dropbot-disconnected')
-    gsignal('chip-inserted')
-    gsignal('chip-removed')
-
     implements(IPlugin)
     implements(IApplicationMode)
     implements(IElectrodeActuator)
@@ -454,33 +406,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.menu_item_root = None
         self.diagnostics_results_dir = ph.path('.dropbot-diagnostics')
         self.actuated_area = 0
-
-        #: .. versionadded:: 2.24
-        self.device_load_capacitance = 0
         self.monitor_task = None
-
-        #: .. versionadded:: 2.24
-        self._step_capacitances = []
-
-        #: .. versionadded:: 2.26
-        self._state_applied = threading.Event()
-
-        self._channel_states_received = threading.Event()
 
         #: .. versionadded:: 2.24
         self.device_time_sync = {}
 
-        #: .. versionadded:: 2.25
-        self.actuated_channels = []
-
-        #: .. versionadded:: 2.24
-        self.capacitance_watch_thread = None
-        #: .. versionadded:: 2.24
-        self.capacitance_exceeded = threading.Event()
-        #: .. versionadded:: 2.33
-        self._actuation_completed = threading.Event()
-
-        self.chip_watch_thread = None
         self._chip_inserted = threading.Event()
         self._dropbot_connected = threading.Event()
         self.dropbot_connected.count = 0
@@ -551,7 +481,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                       (actuated_channels, value ** 2, si_unit))
             self.push_status(status, None, True)
             _L().debug(status)
-            self._state_applied.set()
 
         self.dropbot_signals.signal('channels-updated')\
             .connect(_on_channels_updated, weak=False)
@@ -1218,21 +1147,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         if not data_dir.isdir():
             data_dir.makedirs_p()
         return data_dir
-
-    def check_device_name_and_version(self):
-        '''
-        .. versionchanged:: 0.22
-        '''
-        raise DeprecationWarning('check_device_name_and_version is '
-                                 'deprecated.')
-
-    def on_flash_firmware(self, widget=None, data=None):
-        '''
-        .. versionchanged:: 0.22
-        '''
-        raise DeprecationWarning('on_flash_firmware is deprecated.  Firmware '
-                                 'flashing is now handled in the '
-                                 '`connect_dropbot` method')
 
     def update_connection_status(self):
         '''
