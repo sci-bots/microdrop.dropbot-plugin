@@ -19,6 +19,10 @@ build:
 requirements:
   build:
     - conda-helpers >=0.4
+    #: ..versionadded:: X.X.X
+    #:     Require `debounce.async.Debounce` for throttling capacitance UI
+    #:     updates.
+    - debounce >=0.3
     #: .. versionchanged:: 2.23
     #: .. versionchanged:: 2.24
     #: .. versionchanged:: 2.25
@@ -70,6 +74,10 @@ requirements:
 
   run:
     - conda-helpers >=0.4
+    #: ..versionadded:: X.X.X
+    #:     Require `debounce.async.Debounce` for throttling capacitance UI
+    #:     updates.
+    - debounce >=0.3
     #: .. versionchanged:: 2.23
     #: .. versionchanged:: 2.24
     #: .. versionchanged:: 2.25

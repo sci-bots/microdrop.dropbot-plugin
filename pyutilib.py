@@ -11,6 +11,7 @@ import warnings
 import webbrowser
 
 from asyncio_helpers import cancellable, sync
+from debounce.async import Debounce
 from dropbot import EVENT_ENABLE, EVENT_CHANNELS_UPDATED, EVENT_SHORTS_DETECTED
 from flatland import Integer, Float, Form, Boolean
 from flatland.validation import ValueAtLeast, ValueAtMost
@@ -56,7 +57,7 @@ import zmq
 
 from ._version import get_versions
 from .noconflict import classmaker
-from .execute import actuate, execute
+from .execute import execute
 __version__ = get_versions()['version']
 del get_versions
 
@@ -434,21 +435,17 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.dropbot_signals.signal('chip-removed').connect(on_removed,
                                                             weak=False)
 
-        # XXX TODO Debounce capacitance updates with `debounce.async.Debounce()`
-        capacitance_update_status = {'time': time.time()}
-
         # Update cached device load capacitance each time the
         # `'capacitance-updated'` signal is emitted from the DropBot.
-        @asyncio.coroutine
         def _on_capacitance_updated(sender, **message):
-            now = time.time()
-            if now - capacitance_update_status['time'] > .2:
-                self.on_device_capacitance_update(message['new_value'],
-                                                  message['V_a'])
-                capacitance_update_status['time'] = now
+            self.on_device_capacitance_update(message['new_value'],
+                                              message['V_a'])
 
+        # Call capacitance update callback _at most_ every 200 ms.
         self.dropbot_signals.signal('capacitance-updated')\
-            .connect(_on_capacitance_updated, weak=False)
+            .connect(asyncio.coroutine(Debounce(_on_capacitance_updated, 100,
+                                                max_wait=200, leading=True)),
+                     weak=False)
 
         @asyncio.coroutine
         def _on_channels_updated(sender, **message):
