@@ -260,6 +260,8 @@ def execute(proxy, dmf_device, plugin_kwargs, signals):
             responses = signals.signal('actuation-completed')\
                 .send('dropbot_plugin', **result)
             yield asyncio.From(asyncio.gather(*(r[1] for r in responses)))
+        except asyncio.CancelledError:
+            raise
         except:
             logging.info('on_actuation_request', exc_info=True)
             raise
