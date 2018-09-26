@@ -19,7 +19,7 @@ build:
 requirements:
   build:
     - conda-helpers >=0.4
-    #: ..versionadded:: X.X.X
+    #: ..versionadded:: 2.38
     #:     Require `debounce.async.Debounce` for throttling capacitance UI
     #:     updates.
     - debounce >=0.3
@@ -35,7 +35,7 @@ requirements:
     #: .. versionchanged:: 2.37
     #: .. versionchanged:: 2.37.2
     #:     Verify that DropBot device is found before closing Teensy Loader.
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.38
     #:     Add async DropBot monitor coroutine.
     - dropbot >=1.67.1
     - flatland-fork
@@ -51,7 +51,7 @@ requirements:
     #:     Require updated `IPlugin` interface where `on_step_run()` is a
     #:     coroutine, accepting plugin step parameters and signals namespace as
     #:     arguments.
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.38
     #:     Require main window status labels `gtk.HBox` container.
     - microdrop >=2.31
     - microdrop-plugin-template
@@ -76,7 +76,7 @@ requirements:
 
   run:
     - conda-helpers >=0.4
-    #: ..versionadded:: X.X.X
+    #: ..versionadded:: 2.38
     #:     Require `debounce.async.Debounce` for throttling capacitance UI
     #:     updates.
     - debounce >=0.3
@@ -92,7 +92,7 @@ requirements:
     #: .. versionchanged:: 2.37
     #: .. versionchanged:: 2.37.2
     #:     Verify that DropBot device is found before closing Teensy Loader.
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.38
     #:     Add async DropBot monitor coroutine.
     - dropbot >=1.67.1
     - flatland-fork
@@ -108,7 +108,7 @@ requirements:
     #:     Require updated `IPlugin` interface where `on_step_run()` is a
     #:     coroutine, accepting plugin step parameters and signals namespace as
     #:     arguments.
-    #: .. versionchanged:: X.X.X
+    #: .. versionchanged:: 2.38
     #:     Require main window status labels `gtk.HBox` container.
     - microdrop >=2.31
     - microdrop-plugin-template

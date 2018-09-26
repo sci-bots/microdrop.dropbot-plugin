@@ -999,7 +999,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.25
             Kill any currently running step.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.38
             Stop background DropBot connection monitor task.
         '''
         if self.plugin_timeout_id is not None:
@@ -1023,7 +1023,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Register ``identify_electrode()`` electrode command with command
             plugin.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.38
             Maintain DropBot connection using background monitor task.
         '''
         super(DropBotPlugin, self).on_plugin_enable()
@@ -1068,7 +1068,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def start_monitor(self):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.38
 
         Start DropBot connection monitor task.
         '''
@@ -1092,7 +1092,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def stop_monitor(self):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.38
 
         Stop DropBot connection monitor task.
         '''
