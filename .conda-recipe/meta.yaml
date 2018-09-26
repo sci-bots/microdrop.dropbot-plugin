@@ -51,7 +51,9 @@ requirements:
     #:     Require updated `IPlugin` interface where `on_step_run()` is a
     #:     coroutine, accepting plugin step parameters and signals namespace as
     #:     arguments.
-    - microdrop >=2.30
+    #: .. versionchanged:: X.X.X
+    #:     Require main window status labels `gtk.HBox` container.
+    - microdrop >=2.31
     - microdrop-plugin-template
     - microdrop-plugin-manager >=0.14
     - microdrop-utility
@@ -106,7 +108,9 @@ requirements:
     #:     Require updated `IPlugin` interface where `on_step_run()` is a
     #:     coroutine, accepting plugin step parameters and signals namespace as
     #:     arguments.
-    - microdrop >=2.30
+    #: .. versionchanged:: X.X.X
+    #:     Require main window status labels `gtk.HBox` container.
+    - microdrop >=2.31
     - microdrop-plugin-template
     - microdrop-utility
     #: .. versionadded:: 2.24

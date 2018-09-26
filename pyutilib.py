@@ -58,6 +58,7 @@ import zmq
 from ._version import get_versions
 from .noconflict import classmaker
 from .execute import execute
+from .status import DropBotStatusView
 __version__ = get_versions()['version']
 del get_versions
 
@@ -421,7 +422,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         @asyncio.coroutine
         def on_inserted(sender, **message):
             self.chip_inserted.set()
-            self.update_connection_status()
+            self.dropbot_status.chip_inserted = True
 
         self.dropbot_signals.signal('chip-inserted').connect(on_inserted,
                                                              weak=False)
@@ -429,7 +430,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         @asyncio.coroutine
         def on_removed(sender, **message):
             self.chip_inserted.clear()
-            self.update_connection_status()
+            self.dropbot_status.chip_inserted = False
             self.clear_status()
 
         self.dropbot_signals.signal('chip-removed').connect(on_removed,
@@ -614,7 +615,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.device_time_sync = {'host': dt.datetime.utcnow(),
                                      'device_us':
                                      self.control_board.microseconds()}
-            self.update_connection_status()
+            self.dropbot_status.on_connected(dropbot_)
 
         self.dropbot_signals.signal('connected').connect(_on_dropbot_connected,
                                                          weak=False)
@@ -625,7 +626,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # Clear event indicating DropBot has been disconnected.
             self.dropbot_connected.clear()
             self.control_board = None
-            self.update_connection_status()
+            self.dropbot_status.on_disconnected()
 
         self.dropbot_signals.signal('disconnected')\
             .connect(_on_dropbot_disconnected, weak=False)
@@ -878,6 +879,21 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.37
             Replace original MicroDrop help menu item.
         '''
+        app = get_app()
+        # Get reference to status labels container in main window.
+        hbox = app.builder.get_object('status_labels')
+
+        self.dropbot_status = DropBotStatusView()
+        frame = gtk.Frame('DropBot')
+        frame.add(self.dropbot_status.widget)
+        # Pack DropBot status frame into `VBox` to prevent from expanding
+        # vertically to fill space.
+        vbox = gtk.VBox()
+        vbox.pack_start(frame, fill=False, expand=False)
+        # Add DropBot status frame to main window status labels container.
+        hbox.pack_start(vbox, fill=False, expand=False)
+        vbox.show_all()
+
         # Add DropBot help entry to main window `Help` menu.
         menu_item = gtk.ImageMenuItem(stock_id=gtk.STOCK_HELP)
         menu_item.set_label('_DropBot help...')
@@ -904,7 +920,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.menu_items[0].connect('activate', lambda menu_item:
                                    self.run_all_tests())
 
-        app = get_app()
         self.menu = gtk.Menu()
         self.menu.show_all()
         self.menu_item_root = gtk.MenuItem('_DropBot')
@@ -1007,16 +1022,27 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.36
             Register ``identify_electrode()`` electrode command with command
             plugin.
+
+        .. versionchanged:: X.X.X
+            Maintain DropBot connection using background monitor task.
         '''
         super(DropBotPlugin, self).on_plugin_enable()
-        if not self.menu_items:
-            # Schedule initialization of menu user interface.  Calling
-            # `create_ui()` directly is not thread-safe, since it includes GTK
-            # code.
-            gtk_threadsafe(self.create_ui)()
 
         self.cleanup_plugin()
-        self.update_connection_status()
+
+        @gtk_threadsafe
+        def init_ui():
+            if not self.menu_items:
+                # Schedule initialization of menu user interface.  Calling
+                # `create_ui()` directly is not thread-safe, since it includes GTK
+                # code.
+                self.create_ui()
+            else:
+                self.dropbot_status.widget.parent.props.visible = True
+            self.dropbot_status.on_disconnected()
+            self.start_monitor()
+
+        init_ui()
 
         # Initialize 0MQ hub plugin and subscribe to hub messages.
         self.plugin = DmfZmqPlugin(self, self.name, get_hub_uri())
@@ -1039,8 +1065,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                     command_name='identify_electrode', namespace='electrode',
                     plugin_name=self.name, title='_Visually identify '
                     'electrode')
-
-        self.start_monitor()
 
     def start_monitor(self):
         '''
@@ -1079,9 +1103,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.control_board = None
             self.monitor_task.cancel()
             self.monitor_task = None
-            gtk_threadsafe(self.update_connection_status)()
+            self.dropbot_status.on_disconnected()
 
     def on_plugin_disable(self):
+        self.dropbot_status.widget.parent.props.visible = True
         self.cleanup_plugin()
 
     def on_app_exit(self):
@@ -1132,8 +1157,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         _L().info('Turning off all electrodes.')
         self.control_board.turn_off_all_channels()
         self.control_board.hv_output_enabled = False
-        self.update_connection_status()
         self.push_status('Turned off all electrodes.')
+        self.dropbot_status.clear()
 
     def data_dir(self):
         '''
@@ -1144,50 +1169,6 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         if not data_dir.isdir():
             data_dir.makedirs_p()
         return data_dir
-
-    def update_connection_status(self):
-        '''
-        Update connection status message and corresponding UI label.
-
-        .. versionchanged:: 0.14
-            Schedule update of control board status label in main GTK thread.
-
-        .. versionchanged:: 0.18
-            Toggle sensitivity of DropBot control board menu items based on
-            control board connection status.
-
-        .. versionchanged:: 0.19
-            Always keep ``Help`` menu item sensitive, regardless of DropBot
-            connection status.
-
-            Indicate if chip is inserted in UI status label.
-        '''
-        self.connection_status = "Not connected"
-        app = get_app()
-        if self.dropbot_connected.is_set():
-            properties = self.control_board.properties
-            version = self.control_board.hardware_version
-            n_channels = self.control_board.number_of_channels
-            id = self.control_board.id
-            uuid = self.control_board.uuid
-            self.connection_status = ('%s v%s (Firmware: %s, id: %s, uuid: '
-                                      '%s)\n' '%d channels%s' %
-                                      (properties['display_name'], version,
-                                       properties['software_version'], id,
-                                       str(uuid)[:8], n_channels,
-                                       '' if not self.chip_inserted.is_set()
-                                       else ' [chip inserted]'))
-
-        @gtk_threadsafe
-        def _update_ui_connected_status():
-            # Enable/disable control board menu items based on the connection
-            # status of the control board.
-            for menu_item_i in self.menu_items:
-                menu_item_i.set_sensitive(self.dropbot_connected.is_set())
-
-            app.main_window_controller.label_control_board_status\
-                .set_text(self.connection_status)
-        _update_ui_connected_status()
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def measure_capacitance(self):
@@ -1231,28 +1212,21 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         # was set.
         voltage = actuation_voltage
 
-        app = get_app()
         app_values = self.get_app_values()
         c_liquid = app_values['c_liquid']
         if c_liquid == np.inf:
             c_liquid = 0
 
-        label = 'Voltage: {}V, Capacitance: {}F'.format(*map(si.si_format,
-                                                             (voltage,
-                                                              capacitance)))
-
         # add normalized force to the label if we've calibrated the device
         if c_liquid > 0:
-            # TODO: calculate force including filler media
-            label += (u'\nForce: {}N/mm (c<sub>device</sub>='
-                      u'{}F/mm<sup>2</sup>)'
-                      .format(*map(si.si_format, (1e3 * 0.5 * c_liquid *
-                                                  voltage ** 2, c_liquid))))
+            self.dropbot_status.force = 1e3 * 0.5 * c_liquid * voltage ** 2
+            self.dropbot_status.c_device = c_liquid
+        else:
+            self.dropbot_status.force = None
+            self.dropbot_status.c_device = None
 
-        # Schedule update of control board status label in main GTK thread.
-        gobject.idle_add(app.main_window_controller.label_control_board_status
-                         .set_markup, ', '.join([self.connection_status,
-                                                 label]))
+        self.dropbot_status.capacitance = capacitance
+        self.dropbot_status.voltage = actuation_voltage
 
     @gtk_threadsafe
     def _calibrate_device_capacitance(self, name):
