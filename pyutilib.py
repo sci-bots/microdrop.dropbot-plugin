@@ -770,7 +770,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 image = gtk.Image()
                 image_size = 150
                 image_path = ph.path(__file__).parent\
-                    .joinpath('dropbot-power-small.png')
+                    .joinpath('dropbot-power.png')
                 pixbuf = gtk.gdk.pixbuf_new_from_file(image_path)
                 if pixbuf.props.width > pixbuf.props.height:
                     scale = image_size / pixbuf.props.width
