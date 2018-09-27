@@ -37,7 +37,9 @@ requirements:
     #:     Verify that DropBot device is found before closing Teensy Loader.
     #: .. versionchanged:: 2.38
     #:     Add async DropBot monitor coroutine.
-    - dropbot >=1.67.1
+    #: .. versionchanged:: 2.38.1
+    #:     Emit `'no-power'` signal from monitor if 12V not plugged.
+    - dropbot >=1.68
     - flatland-fork
     - json-tricks >=3.8.0
     #: .. versionadded:: 2.27
@@ -94,7 +96,9 @@ requirements:
     #:     Verify that DropBot device is found before closing Teensy Loader.
     #: .. versionchanged:: 2.38
     #:     Add async DropBot monitor coroutine.
-    - dropbot >=1.67.1
+    #: .. versionchanged:: 2.38.1
+    #:     Emit `'no-power'` signal from monitor if 12V not plugged.
+    - dropbot >=1.68
     - flatland-fork
     - json-tricks >=3.8.0
     #: .. versionadded:: 2.27
