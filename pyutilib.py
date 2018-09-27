@@ -1202,7 +1202,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             self.dropbot_status.on_disconnected()
 
     def on_plugin_disable(self):
-        self.dropbot_status.widget.parent.props.visible = True
+        '''
+        .. versionchanged:: 2.38.3
+            Hide DropBot status frame.
+        '''
+        self.dropbot_status.widget.parent.props.visible = False
         self.cleanup_plugin()
 
     def on_app_exit(self):
