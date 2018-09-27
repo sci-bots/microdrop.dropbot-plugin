@@ -77,7 +77,7 @@ PluginGlobals.push_env('microdrop.managed')
 
 def gtk_on_link_clicked(widget, uri):
     '''
-    .. versionadded:: X.X.X
+    .. versionadded:: 2.38.1
 
     Callback to workaround the following error:
 
@@ -392,7 +392,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Display an error message when a "halted" event is received from the
             DropBot.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.38.1
             Show dialog if 12V power supply is not detected while attempting to
             connect to a DropBot, prompting user to either plugin in 12V power
             supply or unplug DropBot entirely.
