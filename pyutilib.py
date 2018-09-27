@@ -75,6 +75,20 @@ warnings.simplefilter('ignore', tables.NaturalNameWarning)
 PluginGlobals.push_env('microdrop.managed')
 
 
+def gtk_on_link_clicked(widget, uri):
+    '''
+    .. versionadded:: X.X.X
+
+    Callback to workaround the following error:
+
+        GtkWarning: No application is registered as handling this file
+
+    This is a known issue, e.g., https://bitbucket.org/tortoisehg/hgtk/issues/1656/link-in-about-box-doesnt-work#comment-312511
+    '''
+    webbrowser.open_new_tab(uri)
+    return True
+
+
 class DmfZmqPlugin(ZmqPlugin):
     """
     API for adding/clearing droplet routes.
@@ -277,19 +291,9 @@ def require_test_board(func):
                              '<a href="https://github.com/sci-bots/dropbot-v3/wiki/DropBot-Test-Board#loading-dropbot-test-board">'
                              'the DropBot Test Board documentation</a>')
 
-        def _on_link_clicked(label, uri):
-            '''
-            Callback to workaround the following error:
-
-                GtkWarning: No application is registered as handling this file
-
-            This is a known issue, e.g., https://bitbucket.org/tortoisehg/hgtk/issues/1656/link-in-about-box-doesnt-work#comment-312511
-            '''
-            webbrowser.open_new_tab(uri)
-            return True
         # Use `activate-link` callback to manually handle action when hyperlink
         # is clicked/activated.
-        dialog.label.connect("activate-link", _on_link_clicked)
+        dialog.label.connect("activate-link", gtk_on_link_clicked)
 
         dialog.props.use_markup = True
 
@@ -387,6 +391,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionchanged:: 2.32
             Display an error message when a "halted" event is received from the
             DropBot.
+
+        .. versionchanged:: X.X.X
+            Show dialog if 12V power supply is not detected while attempting to
+            connect to a DropBot, prompting user to either plugin in 12V power
+            supply or unplug DropBot entirely.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -706,6 +715,93 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         self.dropbot_signals.signal('version-mismatch')\
             .connect(on_version_mismatch, weak=False)
+
+        @asyncio.coroutine
+        def on_no_power(*args, **kwargs):
+            message = ('Please connect **DropBot 12V power supply** _or_ '
+                       '**disconnect DropBot entirely**.\n'
+                       '\n'
+                       'See [DropBot user guide][1] for more information.\n'
+                       '\n'
+                       '[1]: https://github.com/sci-bots/dropbot-v3/wiki/UserGuide#connect-dropbot')
+
+            @sync(gtk_threadsafe)
+            def no_power_dialog():
+                parent = get_app().main_window_controller.view
+                dialog = gtk.Dialog('No DropBot 12V power supply detected',
+                                    buttons=('_Retry', gtk.RESPONSE_OK),
+                                    flags=gtk.DIALOG_MODAL |
+                                    gtk.DIALOG_DESTROY_WITH_PARENT,
+                                    parent=parent)
+                # Disable dialog window close "X" button.
+                dialog.props.deletable = False
+
+                # Do not close window when <Escape> key is pressed.
+                #
+                # See: http://www.async.com.br/faq/pygtk/index.py?req=show&file=faq10.013.htp
+                def on_response(dialog, response):
+                    if response in (gtk.RESPONSE_DELETE_EVENT, gtk.RESPONSE_CLOSE):
+                        dialog.emit_stop_by_name('response')
+
+                dialog.connect('delete_event', lambda *args: True)
+                dialog.connect('response', on_response)
+                dialog.connect('close', lambda *args: True)
+
+                buttons = {'skip':
+                           dialog.get_widget_for_response(gtk.RESPONSE_OK)}
+
+                content_area = dialog.get_content_area()
+                label = gtk.Label(markdown2pango.markdown2pango(message))
+                label.props.use_markup = True
+                label.props.wrap = True
+                label.props.xpad = 20
+                label.props.ypad = 20
+                label.props.height_request = 200
+                label.props.height_request = 100
+                # Align text to top left of dialog.
+                label.set_alignment(0, 0)
+
+                # Use `activate-link` callback to manually handle action when
+                # hyperlink is clicked/activated.
+                label.connect("activate-link", gtk_on_link_clicked)
+
+                hbox = gtk.HBox()
+
+                image = gtk.Image()
+                image_size = 150
+                image_path = ph.path(__file__).parent\
+                    .joinpath('dropbot-power-small.png')
+                pixbuf = gtk.gdk.pixbuf_new_from_file(image_path)
+                if pixbuf.props.width > pixbuf.props.height:
+                    scale = image_size / pixbuf.props.width
+                else:
+                    scale = image_size / pixbuf.props.height
+                width = int(scale * pixbuf.props.width)
+                height = int(scale * pixbuf.props.height)
+                pixbuf = pixbuf.scale_simple(width, height,
+                                             gtk.gdk.INTERP_BILINEAR)
+                image.set_from_pixbuf(pixbuf)
+                hbox.pack_start(image, expand=False, fill=False)
+                hbox.pack_start(label, expand=True, fill=True)
+                content_area.pack_start(hbox, expand=True, fill=True)
+                content_area.show_all()
+                try:
+                    response = dialog.run()
+                    response_button = dialog.get_widget_for_response(response)
+                    response_str = [b[0] for b in buttons.items()
+                                    if b[1] == response_button][0]
+                    return response_str
+                finally:
+                    dialog.destroy()
+
+            response = yield asyncio.From(no_power_dialog())
+
+            if response == 'skip':
+                raise IOError(message)
+            raise asyncio.Return(response)
+
+        self.dropbot_signals.signal('no-power').connect(on_no_power,
+                                                        weak=False)
 
     @gtk_threadsafe
     def clear_status(self):
