@@ -3,9 +3,9 @@ from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 import datetime as dt
 import gzip
+import json
 import re
 import threading
-import time
 import types
 import warnings
 import webbrowser
@@ -1265,7 +1265,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionadded:: 0.18
         '''
         app = get_app()
-        data_dir = app.experiment_log.get_log_path().joinpath(self.name)
+        data_dir = (app.experiment_log_controller.experiment_ctrl.working_dir
+                    .joinpath(self.name))
         if not data_dir.isdir():
             data_dir.makedirs_p()
         return data_dir
@@ -1573,63 +1574,24 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         self.control_board.frequency = frequency
 
     @require_connection(log_level='info')  # Log if DropBot is not connected.
-    def on_experiment_log_changed(self, log):
+    def on_protocol_finished(self):
         '''
-        Add control board metadata to the experiment log.
-
-        .. versionchanged:: 0.16.1
-            Only attempt to run diagnostic tests if DropBot hardware is
-            connected.
-
-        .. versionchanged:: 2.35
-            - Only run entire method if DropBot hardware is connected.
-            - Display progress in a dialog while running diagnostic tests and
-              allow user to cancel (logging test results for any completed
-              tests).
+        .. versionadded:: X.X.X
+            Write the name, hardware version, id, and firmware version of the
+            control board to the experiment log.
         '''
-        # Check if the experiment log already has control board meta data, and
-        # if so, return.
-        data = log.get("control board name")
-        for val in data:
-            if val:
-                return
-
-        # add the name, hardware version, id, and firmware version to the
-        # experiment log metadata
         data = {}
-        data["control board name"] = \
-            self.control_board.properties['display_name']
-        data["control board id"] = \
-            self.control_board.id
-        data["control board uuid"] = \
-            self.control_board.uuid
+        data["control board name"] = (self.control_board
+                                      .properties['display_name'])
+        data["control board id"] = self.control_board.id
+        data["control board uuid"] = str(self.control_board.uuid)
         data["control board hardware version"] = (self.control_board
                                                   .hardware_version)
         data["control board software version"] = (self.control_board
                                                   .properties
                                                   ['software_version'])
-        log.add_data(data)
-
-        # add metadata to experiment log
-        log.metadata[self.name] = data
-
-        # run diagnostic tests
-        app_values = self.get_app_values()
-        if app_values.get('Auto-run diagnostic tests'):
-            _L().info('Running diagnostic tests')
-            tests = ['system_info',
-                     'test_i2c',
-                     'test_voltage',
-                     'test_shorts',
-                     'test_on_board_feedback_calibration']
-            future = self.run_tests(tests)
-            # XXX Execute pending GTK events to update progress dialog until
-            # tests are completed.
-            while not future.done():
-                while gtk.events_pending():
-                    gtk.main_iteration_do(block=False)
-                time.sleep(.01)
-        self._use_cached_capacitance_prompt()
+        with self.data_dir().joinpath('hardware.json').open('w') as output:
+            json.dump(data, output, indent=4)
 
     @require_connection()  # Display error dialog if DropBot is not connected.
     def run_tests(self, tests=None):
@@ -1766,7 +1728,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 self.set_app_values(dict(c_liquid=0, c_filler=0))
 
     def get_schedule_requests(self, function_name):
-        """
+        '''
         Returns a list of scheduling requests (i.e., ScheduleRequest
         instances) for the function specified by function_name.
 
@@ -1774,13 +1736,19 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         .. versionadded:: 2.34
             Enable _after_ command plugin and zmq hub to ensure command can be
             registered.
+
+        .. versionchanged:: X.X.X
+            Handle ``on_protocol_finished`` before experiment log controller to
+            write hardware info.
         '''
-        """
         if function_name == 'on_app_options_changed':
             return [ScheduleRequest('microdrop.app', self.name)]
         elif function_name == 'on_protocol_swapped':
             return [ScheduleRequest('microdrop.gui.protocol_grid_controller',
                                     self.name)]
+        elif function_name == 'on_protocol_finished':
+            return [ScheduleRequest(self.name,
+                                    'microdrop.gui.experiment_log_controller')]
         elif function_name == 'on_app_exit':
             return [ScheduleRequest('microdrop.gui.experiment_log_controller',
                                     self.name)]
