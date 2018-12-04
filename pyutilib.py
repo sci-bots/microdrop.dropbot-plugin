@@ -396,6 +396,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Show dialog if 12V power supply is not detected while attempting to
             connect to a DropBot, prompting user to either plugin in 12V power
             supply or unplug DropBot entirely.
+
+        .. versionchanged:: X.X.X
+            Fix error dialog when DropBot reports a "halted" event.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -552,7 +555,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             refresh_channels()
             self.push_status(status)
             gtk_threadsafe(_L().error)\
-                ('\n'.join([status, map(str.strip, message.splitlines())]))
+                ('\n'.join([status, '', '\n'.join(map(str.strip,
+                                                      message.splitlines()))]))
 
         self.dropbot_signals.signal('halted').connect(_on_halted, weak=False)
 
