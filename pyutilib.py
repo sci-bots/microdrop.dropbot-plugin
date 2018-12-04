@@ -399,6 +399,8 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
         .. versionchanged:: X.X.X
             Fix error dialog when DropBot reports a "halted" event.
+
+            Disable real-time mode if DropBot reports a "halted" event.
         '''
         # Explicitly initialize GObject base class since it is not the first
         # base class listed.
@@ -553,6 +555,9 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 cables and plug back in).'''.strip()
             # XXX Refresh channels since channels were disabled.
             refresh_channels()
+            app = get_app()
+            # Disable real-time mode.
+            gtk_threadsafe(app.set_app_values)({'realtime_mode': False})
             self.push_status(status)
             gtk_threadsafe(_L().error)\
                 ('\n'.join([status, '', '\n'.join(map(str.strip,
