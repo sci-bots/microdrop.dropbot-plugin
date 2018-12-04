@@ -1815,6 +1815,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     def on_mode_changed(self, old_mode, new_mode):
         '''
         .. versionadded:: 2.37
+        .. versionchanged:: X.X.X
+            When real-time mode is enabled or when a protocol starts running,
+            detect shorts to enable any channels where a short is not detected.
+            Useful, e.g., to re-enable channels after a "halted" event.
         '''
         if (all([(old_mode & MODE_REAL_TIME_MASK),
                  (new_mode & ~MODE_REAL_TIME_MASK),
@@ -1824,5 +1828,20 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             # Either real-time mode was disabled when it was enabled or
             # protocol just stopped running.
             self.turn_off()
+        elif (all([(old_mode & ~MODE_REAL_TIME_MASK),
+                   (new_mode & MODE_REAL_TIME_MASK),
+                   (new_mode & ~MODE_RUNNING_MASK)]) or
+              all([(old_mode & ~MODE_RUNNING_MASK),
+                   (new_mode & MODE_RUNNING_MASK)])):
+            # Either real-time mode was enabled when it was disabled or
+            # protocol just started running.
+            @require_connection(log_level='info')
+            def detect_shorts(self):
+                # Detect shorts to enable any channels where a short is not
+                # detected.  Useful, e.g., to re-enable channels after a
+                # "halted" event.
+                with self.control_board.transaction_lock:
+                    self.control_board.detect_shorts()
+            detect_shorts(self)
 
 PluginGlobals.pop_env()
