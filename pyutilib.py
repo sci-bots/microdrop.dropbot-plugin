@@ -397,7 +397,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             connect to a DropBot, prompting user to either plugin in 12V power
             supply or unplug DropBot entirely.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.38.6
             Fix error dialog when DropBot reports a "halted" event.
 
             Disable real-time mode if DropBot reports a "halted" event.
@@ -1585,7 +1585,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     @require_connection(log_level='info')  # Log if DropBot is not connected.
     def on_protocol_finished(self):
         '''
-        .. versionadded:: X.X.X
+        .. versionadded:: 2.38.5
             Write the name, hardware version, id, and firmware version of the
             control board to the experiment log.
         '''
@@ -1746,7 +1746,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Enable _after_ command plugin and zmq hub to ensure command can be
             registered.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.38.5
             Handle ``on_protocol_finished`` before experiment log controller to
             write hardware info.
         '''
@@ -1815,7 +1815,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     def on_mode_changed(self, old_mode, new_mode):
         '''
         .. versionadded:: 2.37
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.38.6
             When real-time mode is enabled or when a protocol starts running,
             detect shorts to enable any channels where a short is not detected.
             Useful, e.g., to re-enable channels after a "halted" event.
