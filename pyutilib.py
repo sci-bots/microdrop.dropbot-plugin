@@ -1272,6 +1272,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
     def data_dir(self):
         '''
         .. versionadded:: 0.18
+
+        .. versionchanged:: 2.38.5
+            Use experiment controller to obtain working directory.  Requires
+            ``microdrop>=2.34``.
         '''
         app = get_app()
         data_dir = (app.experiment_log_controller.experiment_ctrl.working_dir
