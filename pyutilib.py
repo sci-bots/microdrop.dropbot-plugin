@@ -1283,7 +1283,7 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             Use experiment controller to obtain working directory.  Requires
             ``microdrop>=2.34``.
 
-        .. versionchanged:: X.X.X
+        .. versionchanged:: 2.38.7
             Revert change from **2.38.5**; i.e., use :meth:`get_log_path()`
             method of experiment log controller plugin to obtain working
             directory.
