@@ -55,7 +55,9 @@ requirements:
     #:     arguments.
     #: .. versionchanged:: 2.38
     #:     Require main window status labels `gtk.HBox` container.
-    - microdrop >=2.31
+    #: .. versionchanged:: 2.38.7
+    #:     Require `ExperimentLogController` with `get_log_path()` method.
+    - microdrop >=2.31,<2.34
     - microdrop-plugin-template
     - microdrop-plugin-manager >=0.14
     - microdrop-utility
