@@ -1271,15 +1271,25 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
 
     def data_dir(self):
         '''
+        Returns
+        -------
+        path_helpers.path
+            Working directory for current experiment.
+
+
         .. versionadded:: 0.18
 
         .. versionchanged:: 2.38.5
             Use experiment controller to obtain working directory.  Requires
             ``microdrop>=2.34``.
+
+        .. versionchanged:: X.X.X
+            Revert change from **2.38.5**; i.e., use :meth:`get_log_path()`
+            method of experiment log controller plugin to obtain working
+            directory.
         '''
         app = get_app()
-        data_dir = (app.experiment_log_controller.experiment_ctrl.working_dir
-                    .joinpath(self.name))
+        data_dir = app.experiment_log.get_log_path().joinpath(self.name)
         if not data_dir.isdir():
             data_dir.makedirs_p()
         return data_dir
