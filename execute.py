@@ -94,6 +94,10 @@ def actuate(proxy, dmf_device, electrode_states, duration_s=0,
 
     result = {}
 
+    actuated_areas = (dmf_device.electrode_areas
+                      .ix[requested_electrodes.values])
+    actuated_area = actuated_areas.sum()
+
     if not all(threshold_criteria):
         # ## Case 1: no volume threshold specified.
         #  1. Set control board state of channels according to requested
@@ -128,10 +132,6 @@ def actuate(proxy, dmf_device, electrode_states, duration_s=0,
         #
         # Note: `app_values['c_liquid']` represents a *specific
         # capacitance*, i.e., has units of $F/mm^2$.
-        actuated_areas = (dmf_device.electrode_areas
-                          .ix[requested_electrodes.values])
-        actuated_area = actuated_areas.sum()
-
         meters_squared_area = actuated_area * (1e-3 ** 2)  # m^2 area
         # Approximate length of unit side in SI units.
         si_length, pow10 = si.split(np.sqrt(meters_squared_area))
