@@ -166,6 +166,7 @@ def actuate(proxy, dmf_device, electrode_states, duration_s=0,
             # Add actuated area to capacitance update messages.
             for capacitance_i in capacitance_messages:
                 capacitance_i['actuated_area'] = actuated_area
+                capacitance_i.pop('actuation_uuid1', None)
 
             result['threshold'] = {'target': dropbot_event['target'],
                                    'measured': dropbot_event['new_value'],
