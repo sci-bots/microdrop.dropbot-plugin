@@ -1456,12 +1456,12 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             index 1 (adjacent to ``timestamp_utc`` column).
         '''
         logger = _L()  # use logger with method context
-        logger.debug('logging %s capacitance updates',
-                     len(capacitance_updates))
         app = get_app()
 
         # Append data to CSV file.
         csv_output_path = self.data_dir().joinpath('data.csv.gz')
+        logger.debug('logging %s capacitance updates to %s',
+                     len(capacitance_updates), csv_output_path)
         # Only include header if the file does not exist or is empty.
         include_header = not (csv_output_path.isfile() and
                               (csv_output_path.size > 0))

@@ -40,6 +40,14 @@ def actuate(proxy, dmf_device, electrode_states, duration_s=0,
     -------
     actuated_electrodes : list
         List of actuated electrode IDs.
+
+
+    .. versionchanged:: 2.39.0
+        Do not save actuation uuid for volume threshold actuations.
+    .. versionchanged:: 2.39.0
+        Fix actuated area field typo.
+    .. versionchanged:: 2.39.0
+        Compute actuated area for static (i.e., delay-based) actuations.
     '''
     requested_electrodes = electrode_states[electrode_states > 0].index
     requested_channels = (dmf_device.channels_by_electrode
@@ -94,6 +102,10 @@ def actuate(proxy, dmf_device, electrode_states, duration_s=0,
 
     result = {}
 
+    actuated_areas = (dmf_device.electrode_areas
+                      .ix[requested_electrodes.values])
+    actuated_area = actuated_areas.sum()
+
     if not all(threshold_criteria):
         # ## Case 1: no volume threshold specified.
         #  1. Set control board state of channels according to requested
@@ -128,10 +140,6 @@ def actuate(proxy, dmf_device, electrode_states, duration_s=0,
         #
         # Note: `app_values['c_liquid']` represents a *specific
         # capacitance*, i.e., has units of $F/mm^2$.
-        actuated_areas = (dmf_device.electrode_areas
-                          .ix[requested_electrodes.values])
-        actuated_area = actuated_areas.sum()
-
         meters_squared_area = actuated_area * (1e-3 ** 2)  # m^2 area
         # Approximate length of unit side in SI units.
         si_length, pow10 = si.split(np.sqrt(meters_squared_area))
@@ -165,7 +173,8 @@ def actuate(proxy, dmf_device, electrode_states, duration_s=0,
             capacitance_messages = dropbot_event['capacitance_updates']
             # Add actuated area to capacitance update messages.
             for capacitance_i in capacitance_messages:
-                capacitance_i['acuated_area'] = actuated_area
+                capacitance_i['actuated_area'] = actuated_area
+                capacitance_i.pop('actuation_uuid1', None)
 
             result['threshold'] = {'target': dropbot_event['target'],
                                    'measured': dropbot_event['new_value'],
