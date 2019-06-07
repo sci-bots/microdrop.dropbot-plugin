@@ -40,6 +40,14 @@ def actuate(proxy, dmf_device, electrode_states, duration_s=0,
     -------
     actuated_electrodes : list
         List of actuated electrode IDs.
+
+
+    .. versionchanged:: X.X.X
+        Do not save actuation uuid for volume threshold actuations.
+    .. versionchanged:: X.X.X
+        Fix actuated area field typo.
+    .. versionchanged:: X.X.X
+        Compute actuated area for static (i.e., delay-based) actuations.
     '''
     requested_electrodes = electrode_states[electrode_states > 0].index
     requested_channels = (dmf_device.channels_by_electrode
