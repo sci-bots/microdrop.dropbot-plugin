@@ -255,9 +255,9 @@ def error_ignore(on_error=None):
         def _wrapped(*args, **kwargs):
             try:
                 return func(*args, **kwargs)
-            except Exception, exception:
+            except Exception as exception:
                 if isinstance(on_error, types.StringTypes):
-                    print on_error
+                    print(on_error)
                 elif callable(on_error):
                     on_error(exception, func, *args, **kwargs)
                 else:
@@ -604,6 +604,10 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                 Enable DropBot ``shorts-detected`` events by setting the
                 respective bit in the event mask.  Fixes bug introduced in
                 2.31.
+
+            .. versionchanged:: 2.39.1
+                Disable ``chip-load-saturated`` events if the value of
+                C16 < 300nF.
             '''
             dropbot_ = message['dropbot']
             map(_L().info, str(dropbot_.properties).splitlines())
@@ -634,6 +638,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
                                      'device_us':
                                      self.control_board.microseconds()}
             self.dropbot_status.on_connected(dropbot_)
+
+            # If the feedback capacitor is < 300nF, disable the chip load
+            # saturation check to prevent false positive triggers.
+            if self.control_board.config.C16 < 0.3e-6:
+                self.control_board.update_state(chip_load_range_margin=-1)
 
         self.dropbot_signals.signal('connected').connect(_on_dropbot_connected,
                                                          weak=False)

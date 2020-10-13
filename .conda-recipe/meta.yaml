@@ -39,7 +39,9 @@ requirements:
     #:     Add async DropBot monitor coroutine.
     #: .. versionchanged:: 2.38.1
     #:     Emit `'no-power'` signal from monitor if 12V not plugged.
-    - dropbot >=1.68
+    #: .. versionchanged:: 2.39.1
+    #:     Use configured C16 value in capacitance measurements.
+    - dropbot >=1.73.4
     - flatland-fork
     - json-tricks >=3.8.0
     #: .. versionadded:: 2.27
