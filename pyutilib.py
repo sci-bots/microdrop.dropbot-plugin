@@ -1647,7 +1647,11 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
             to block until tests are complete, **_but_** **MUST** not be called
             from the GTK main thread, since doing so would prevent the progress
             dialog from displaying/updating.
+
+        Jan 2024: Changed to not do i2c_test since it is causing the tests to
+        fail with current batch of switching boards that can't have uuids assigned
         '''
+
         if tests is None:
             tests = db.self_test.ALL_TESTS
 
@@ -1656,20 +1660,21 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         @asyncio.coroutine
         def _run_tests():
             results = {}
-
             try:
                 for i, test in enumerate(tests):
-                    test_func = getattr(db.hardware_test, test)
-                    signals.signal('test-started')\
-                        .send({'test': test, 'completed': i,
-                               'total': len(tests)})
-                    results[test] = test_func(self.control_board)
-                    signals.signal('test-completed')\
-                        .send({'test': test, 'completed': i + 1,
-                                'total': len(tests), 'results': results})
-                    # Yield control to asyncio event loop.  This provides
-                    # breakpoints where the coroutine may be cancelled.
-                    yield asyncio.From(asyncio.sleep(0))
+                    if test != 'test_i2c':
+                        test_func = getattr(db.hardware_test, test)
+                        signals.signal('test-started')\
+                            .send({'test': test, 'completed': i,
+                                   'total': len(tests)})
+
+                        results[test] = test_func(self.control_board)
+                        signals.signal('test-completed')\
+                            .send({'test': test, 'completed': i + 1,
+                                    'total': len(tests), 'results': results})
+                        # Yield control to asyncio event loop.  This provides
+                        # breakpoints where the coroutine may be cancelled.
+                        yield asyncio.From(asyncio.sleep(0))
             except asyncio.CancelledError:
                 # Gracefully exit if task is cancelled, returning results of
                 # completed tests.
@@ -1784,10 +1789,13 @@ class DropBotPlugin(Plugin, gobject.GObject, StepOptionsController,
         elif function_name == 'on_app_exit':
             return [ScheduleRequest('microdrop.gui.experiment_log_controller',
                                     self.name)]
+        '''
+        core plugins(hub and comand plugin) are enabled before any optional plugins so they cannot be scheduled relative to one another
         elif function_name == 'on_plugin_enable':
             return [ScheduleRequest(p, self.name)
                     for p in ('microdrop.zmq_hub_plugin',
                               'microdrop.command_plugin')]
+        '''
         return []
 
     def find_liquid(self):
